@@ -43,14 +43,20 @@ export interface SourcePolicyPart<P extends Record<string, unknown>> {
 export interface ChannelLink { url: string; label: Localized; triggerId?: string }
 export type ChannelLinks = Partial<Pick<Deployment, 'repository' | 'feishu'>>
 /** Outbound messaging adapter for a source kind's threads. */
+/** A message already delivered to the same conversation, carrying the moment it went out; the receipt it comes from is the only proof of delivery. */
+export type DeliveredMessage = OutboundMessage & { sentAt?: string }
+
 export interface SourceChannel<C> {
   /** Whether a reply may still go to `address`; without it, every address may receive replies. */
   allowed?(address: Record<string, string>, config: C): boolean
   /**
    * Sends a message idempotently by ID; returns `'gone'` when the target conversation no longer accepts replies.
+   * @param delivered - messages of the same conversation already settled as sent, oldest first, excluding this one.
+   * A channel whose record is a local file may render that record from `delivered` plus `message`, so content written
+   * outside the pipeline cannot survive the next delivery. Channels that post to a remote thread ignore it.
    * @throws when delivery failed but may succeed on a later retry.
    */
-  send(host: Pick<SourceContext, 'commands'>, message: OutboundMessage): Promise<'sent' | 'gone'>
+  send(host: Pick<SourceContext, 'commands'>, message: OutboundMessage, delivered?: readonly DeliveredMessage[]): Promise<'sent' | 'gone'>
   /** Returns the URL and label for `address`; `url` is empty when `links` lack the required deployment info. */
   link(address: Record<string, string>, links: ChannelLinks): ChannelLink
 }

@@ -8,6 +8,8 @@ import type { ConfigForm, ConfigFormSnapshot } from '@deepseek-ai/dsh-client-ui-
 import type { Api, ApiResponse, RouteParams } from '../../src/app/api.ts'
 import { SKILL_NAME, SKILL_PREFIX, TEAM_SECTIONS, builtInBase, builtInPart, builtInParts, composePrompt, composeSkill, defaultPrompts,
   environmentSection, policySection, promptParts } from '../../src/app/prompts.ts'
+import { PROMPT_PRESETS } from '../../src/app/prompt-presets.ts'
+import { ONBOARD_KEY } from '../../src/client/onboard.ts'
 import type { DroppedReply, HistoryView, Problem, PromptsView, SetupView, SourceStatusRow, SourceView, StateView, ThreadPageView,
   ThreadRow, TicketPageView,
   TicketRow, TicketStage,
@@ -160,14 +162,15 @@ function sourceStatuses(): SourceStatusRow[] {
 const stateView = (): StateView => ({
   setup: server.setup, load: { running: server.setup.problem ? 0 : 2, queued: 0, maxWorkers: server.settings.executor.maxWorkers },
   masterId: 'master', paused: server.settings.paused,
-  // The panel does not read health; the service script does.
-  health: {},
+  // `health` is what the service script turns into an exit code, and what the overview's first-run card reads.
+  health: server.health,
 })
 const settingsView = (): ApiResponse<'GET settings'> => ({
   policyVersion: 'abcdef1234567890',
   blocks: { policy: { value: server.settings.policy, revision: server.revisions.policy ?? 0 },
     eval: { value: server.settings.eval, revision: server.revisions.eval ?? 0 },
-    executor: { value: server.settings.executor, revision: server.revisions.executor ?? 0 } },
+    executor: { value: server.settings.executor, revision: server.revisions.executor ?? 0 },
+    chatRouter: { value: server.settings.chatRouter, revision: server.revisions.chatRouter ?? 0 } },
   sources: sourceSettings(),
   environment: { root: '/srv/dsh-superagent/work', variables: [
     { owner: 'executor', enabled: true, variables: [{ key: 'DSH_SUPERAGENT_DIR', description: { zh: '工单的执行目录',
@@ -255,6 +258,7 @@ function initial(): PanelServer {
     prompts: { masterId: 'master', sections: TEAM_SECTIONS, skillName: SKILL_NAME.source, builtin: ['feishu', 'github'],
       skillPrefix: SKILL_PREFIX, revision: 0, current: { ...defaults, config: defaultPrompts() },
       defaults: defaultPrompts(), parts: Object.entries(builtInParts()).map(([key, part]) => ({ key, ...part, base: builtInBase(part.text) })),
+      presets: PROMPT_PRESETS,
       defaultChanged: [], revisions: [{ ...defaults, changed: [] }], sessions: [], notificationPending: false, next_offset: null },
     tickets: { open: [ticketSummary()], ended: [ended] }, ticketDetails: { t1: ticketDetail() },
     threads: [threadSummary()], threadPages: threadPage,
@@ -327,7 +331,9 @@ const ROUTES: { [K in keyof Api]: Route<K> } = {
   'GET tickets': { query: ['state', 'offset', 'limit'], answer: ({ query }) => page(server.tickets[query.state === 'ended' ? 'ended'
     : 'open']) },
   'GET tickets/:id': { answer: ({ params }) => server.ticketDetails[params.id] ?? refuse(404, 'Ticket not found') },
+  'POST tickets': { body: true, answer: () => ({ file: '面板工单.md', inbox: 'C:/panel-inbox' }) },
   'POST tickets/:id/retry': { answer: ({ params }) => {
+
     const ticket = ticketOf(params.id)
     if (!ticket) return refuse(404, 'Ticket not found')
     return ticket.actions.retry ? { retried: true } : refuse(400, 'Only an open ticket can be retried, and only when its worker last reported failed or blocked and no person has sent a message since, or when delivering an Input to its worker failed',
@@ -432,6 +438,8 @@ class Reply extends Response {
 export function usePanelServer(cleanup: () => void) {
   beforeEach(() => {
     sessionStorage.clear()
+    // The fake deployment has been used, so the first-run guide stays closed unless a test asks for a fresh one.
+    localStorage.clear(); localStorage.setItem(ONBOARD_KEY, 'seen')
     server = initial()
     vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit): Promise<Response> => {
       if (server.down) return new Response(null, { status: 404 })

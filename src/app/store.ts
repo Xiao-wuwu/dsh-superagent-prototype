@@ -15,7 +15,7 @@ export interface TimelinePlace { at: string; id: string }
 /** Why a message was dropped: its conversation can never receive it (`channelGone`), or its Source no longer listens to it (`channelIgnored`). */
 export type DropReason = 'channelGone' | 'channelIgnored'
 /** Outbound message receipt tracked in the outbox from the moment it is queued (`pending`, `sent`, or `dropped`); delivery attempt counts live on its `reply` effect. */
-export interface Receipt extends OutboundMessage { status: ReplyStatus; dropped?: { at: string; reason: DropReason } }
+export interface Receipt extends OutboundMessage { status: ReplyStatus; sentAt?: string; dropped?: { at: string; reason: DropReason } }
 /** A dropped outbound message receipt, with the timestamp and reason it was dropped. */
 export type Dropped = Receipt & { dropped: { at: string; reason: DropReason } }
 /** Saved settings snapshot with the policy version and ticket notifications it produced (`internal` saves have no origin). */
@@ -186,6 +186,8 @@ export class Store implements Repositories {
   settings(): Settings { return SettingsSchema.parse(this.settingsVersions.current()?.settings ?? {}) }
   /** Revision of one settings block; each configuration page saves against its own block for optimistic concurrency. */
   blockRevision(block: SettingsSave): number { return this.get(KV.settings.block(block)) ?? 0 }
+  /** Advances one block's revision without saving settings; an external declarative file changed the block. */
+  bumpBlock(block: SettingsSave): void { this.set(KV.settings.block(block), this.blockRevision(block) + 1) }
   /** Saves settings as the next revision (making it current) and increments `record.block`'s revision counter when present. */
   saveSettings(value: unknown, record: Omit<SettingsVersion, 'revision' | 'savedAt' | 'settings'> = { source: 'internal', policyVersion: '', policyChanged: false, notified: [] }): Settings {
     const settings = SettingsSchema.parse(value)
@@ -255,6 +257,11 @@ export class Store implements Repositories {
     get: (id: string): Receipt | undefined => this.values<Receipt>('SELECT value FROM outbox WHERE id = ?', id)[0],
     /** Pending message receipts, oldest first. */
     waiting: (): Receipt[] => this.values("SELECT value FROM outbox WHERE value ->> '$.status' = 'pending' ORDER BY rowid"),
+    /**
+     * Sent receipts for one conversation, oldest first. This is what a channel may render its durable record from:
+     * anything not listed here was never delivered through the pipeline.
+     */
+    delivered: (thread: string): Receipt[] => this.values<Receipt>("SELECT value FROM outbox WHERE value ->> '$.status' = 'sent' AND value ->> '$.channel.thread' = ? ORDER BY rowid", thread),
     /** True if an earlier message for the same ticket and conversation is still pending with fewer than `failures` consecutive failed `reply` effect attempts. */
     behind: (id: string, failures: number): boolean => !!this.db.prepare(`SELECT 1 FROM outbox earlier
       JOIN outbox message ON message.id = ? LEFT JOIN effect ON effect.kind = 'reply' AND effect.key = earlier.id
@@ -272,7 +279,7 @@ export class Store implements Repositories {
      * was withdrawn while being sent so its ID cannot be queued again.
      */
     settle: (message: OutboundMessage, outcome: 'sent' | DropReason): void => {
-      const settled = outcome === 'sent' ? { status: 'sent' } : { status: 'dropped', dropped: { at: new Date().toISOString(), reason: outcome } }
+      const settled = outcome === 'sent' ? { status: 'sent', sentAt: new Date().toISOString() } : { status: 'dropped', dropped: { at: new Date().toISOString(), reason: outcome } }
       const { id, channel, text, kind, ticketId } = message
       const updated = this.db.prepare("UPDATE outbox SET value = json_patch(value, ?) WHERE id = ? AND value ->> '$.status' = 'pending'")
         .run(JSON.stringify(settled), id)

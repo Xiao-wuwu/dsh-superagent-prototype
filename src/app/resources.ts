@@ -9,7 +9,7 @@ import { feishuTriggerId } from '../sources/feishu-trigger.ts'
 import { ASSIGNMENTS, INPUTS, assignmentLine, decisionCard, decisionDetails, inputLine, newestPage, preview, textPage, threadCard, ticketCard,
   ticketDetails, triggerCard, type TicketThread } from './cards.ts'
 import { threadTitle } from './views/records.ts'
-import { transcriptEntry } from './context.ts'
+import { transcriptEntry, type TranscriptEvent } from './context.ts'
 import { builtInParts, defaultPrompts } from './prompts.ts'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Commands } from '../infra/commands.ts'
@@ -111,8 +111,22 @@ async function sourcePage(read: Read, source: string, fetch: () => Promise<unkno
 const THREAD_DECISIONS = 5
 const triggerLine = (trigger: Trigger) => ({ trigger_id: trigger.id, actor: trigger.actor.id, human: trigger.human, at: trigger.at,
   preview: preview(trigger.text), chars: trigger.text.length, read: `trigger/${trigger.id}` })
-async function transcript(host: ResourceHost, ticketId: string) {
-  return (await host.context.sessionController.inspect(workerSessionId(ticketId) as SessionId)).events
+async function transcript(host: ResourceHost, ticketId: string): Promise<readonly TranscriptEvent[]> {
+  // DSH 0.2.1 reads a worker's history with `inspect()`; 0.2.2 removed it and returns browser-wire events from
+  // `page()` instead. Keep both branches so one build serves either runtime, and widen only at this seam.
+  const controller = host.context.sessionController as unknown as {
+    inspect?: (session: SessionId) => Promise<{ events: readonly TranscriptEvent[] }>
+    page?: (request: { address: { kind: 'session'; sessionId: SessionId }; maxMessages?: number }, signal?: AbortSignal) =>
+      Promise<{ records: readonly { event: TranscriptEvent }[] }>
+  }
+  const sessionId = workerSessionId(ticketId) as SessionId
+  if (controller.page) {
+    // One page covers what the panel's "read this conversation" view needs; this is not an export of the whole history.
+    const page = await controller.page({ address: { kind: 'session', sessionId }, maxMessages: 200 }, AbortSignal.timeout(15_000))
+    return page.records.map(record => record.event)
+  }
+  if (controller.inspect) return (await controller.inspect(sessionId)).events
+  return []
 }
 
 const ROUTES: readonly Route[] = [
@@ -283,7 +297,7 @@ const ROUTES: readonly Route[] = [
     else if (section === 'transcript') {
       body = (await transcript(host, id)).flatMap((event, index) => {
         const entry = transcriptEntry(event)
-        const said = entry?.message.content.map(block => block.type === 'text' ? block.text : `[${block.type}]`).join(' ') ?? ''
+        const said = entry?.message.content.map((block: { type: string; text?: string }) => block.type === 'text' ? block.text : `[${block.type}]`).join(' ') ?? ''
         return entry ? [{ type: entry.type, preview: preview(said).slice(0, 80), chars: JSON.stringify(entry).length,
           read: `ticket/${id}/message/${index}` }] : []
       }).reverse().map(event => JSON.stringify(event)).join('\n')

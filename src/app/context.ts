@@ -1,6 +1,5 @@
 /** Built-in prompt sections, role policies, and transcript projections for orchestrator and worker Sessions. */
 import { bundledSkills, promptFile } from './skill-files.ts'
-import type { SessionEvent } from '@deepseek-ai/dsh-session'
 export { textPage } from './cards.ts'
 
 /** Built-in host-delivery and tool-usage rules shared by all Sessions; a team may override them (`builtInParts`). */
@@ -25,9 +24,15 @@ export const handoffPolicy = (role: 'orchestrator' | 'worker'): string => `${han
 
 export const autoMergeThreshold = (lines: number): string => `it changes fewer than ${lines} lines (additions plus deletions);`
 
+/**
+ * Shape that both the raw Session event of DSH 0.2.1 and the browser-wire event of 0.2.2 satisfy: `page()` returns
+ * `{ type, data }` entries, and the raw union is structurally the same apart from being narrower, so one mapper serves both.
+ */
+export type TranscriptEvent = { type: string; data: any }
+
 /** Retains message content while omitting streamed chunks, usage accounting, and reasoning blocks. */
-export function transcriptEntry(event: SessionEvent) {
+export function transcriptEntry(event: TranscriptEvent) {
   if (event.type !== 'user/message' && event.type !== 'tool/result' && event.type !== 'assistant/message') return undefined
   const message = event.type === 'user/message' ? event.data : event.data.message
-  return { type: event.type, message: { role: message.role, content: message.content.filter(block => block.type !== 'reasoning') } }
+  return { type: event.type, message: { role: message.role, content: message.content.filter((block: { type: string }) => block.type !== 'reasoning') } }
 }

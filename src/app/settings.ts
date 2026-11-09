@@ -3,6 +3,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { z } from 'zod'
 import { UserError, type EngineForSettings } from '../core/index.ts'
 import { EvalConfigSchema, ExecutorConfigSchema, PolicyConfigSchema, SettingsSchema, policyEffects, policyVersion } from '../policy.ts'
+import { ChatRouterSettingsSchema } from '../chat-router/config.ts'
 import type { Settings as SettingsValue, SettingsBlock, SettingsOrigin, SettingsSave } from '../policy.ts'
 import type { SourceHost } from '../sources/host.ts'
 import type { HealthBoard, HealthEntry } from '../infra/health.ts'
@@ -12,6 +13,7 @@ import { changedPaths, settingsNotice } from './notices.ts'
 import type { Sessions } from './sessions.ts'
 import { setupChanged, type Setup } from './setup.ts'
 import type { Store } from './store.ts'
+import type { DeclarativeWriteBack } from './config-write.ts'
 import { KV } from '../kv.ts'
 
 /**
@@ -29,7 +31,7 @@ interface Block {
   merge(settings: SettingsValue, value: unknown, id: string): SettingsValue
   guard?(current: SettingsValue, candidate: SettingsValue, origin: SettingsOrigin): void
 }
-const BLOCKS: Record<'policy' | 'eval' | 'executor' | 'source', Block> = {
+const BLOCKS: Record<'policy' | 'eval' | 'executor' | 'source' | 'chatRouter', Block> = {
   policy: {
     parse: (value, sources) => {
       const policy = PolicyConfigSchema.parse(value)
@@ -49,6 +51,10 @@ const BLOCKS: Record<'policy' | 'eval' | 'executor' | 'source', Block> = {
     merge: (settings, value, id) => ({ ...settings, sources: { ...settings.sources, [id]: value as SettingsValue['sources'][string] } }),
     // Only the management panel may switch source accounts.
     guard: (current, candidate, origin) => { if (origin !== 'panel' && setupChanged(current, candidate)) throw new UserError('panelOnlyAccounts') },
+  },
+  chatRouter: {
+    parse: value => ChatRouterSettingsSchema.parse(value),
+    merge: (settings, value) => ({ ...settings, chatRouter: value as SettingsValue['chatRouter'] }),
   },
 }
 
@@ -71,6 +77,8 @@ export interface SettingsHost {
   readonly setup: Pick<Setup, 'configured' | 'checkAccounts' | 'blockCommands' | 'restart'>
   /** Triggers an immediate pass so work newly allowed by a settings save runs right away. */
   requestPass(): void
+  /** The instance's own declarative file, when it has one; panel saves are written back to it. */
+  readonly declarative?: Pick<DeclarativeWriteBack, 'write'>
 }
 
 /**
@@ -117,6 +125,7 @@ export class Settings {
       pause: { revision: revision('pause'), value: { paused: settings.paused } },
       eval: { revision: revision('eval'), value: settings.eval },
       executor: { revision: revision('executor'), value: settings.executor },
+      chatRouter: { revision: revision('chatRouter'), value: settings.chatRouter },
       policy: { revision: revision('policy'), rules: rules.map(rule => ({ id: rule.id, name: rule.name, enabled: rule.enabled })),
         allowed: Object.fromEntries(Object.entries(parts).map(([id, part]) => [id, part.allowed.length])), read: 'settings/policy' },
       sources: sources.instances(settings).map(({ id, kind, enabled, installed }) =>
@@ -131,7 +140,7 @@ export class Settings {
     const { store, sources } = this.host
     const settings = store.settings(), id = block.startsWith('source:') ? block.slice('source:'.length) : undefined
     const instance = id === undefined ? undefined : sources.instances(settings).find(item => item.id === id)
-    const value = block === 'pause' ? { paused: settings.paused } : block === 'policy' || block === 'eval' || block === 'executor' ? settings[block]
+    const value = block === 'pause' ? { paused: settings.paused } : block === 'policy' || block === 'eval' || block === 'executor' || block === 'chatRouter' ? settings[block]
       : instance ? { enabled: instance.enabled, config: instance.config } : undefined
     if (value === undefined) throw new UserError('unknownBlock', { block })
     return { block, revision: store.blockRevision(block as SettingsSave), value }
@@ -169,9 +178,19 @@ export class Settings {
     // Re-read current settings after async checks in case unrelated blocks were saved concurrently.
     const old = store.settings()
     const settings = rules.merge(old, parsed, id)
-    if (JSON.stringify(SettingsSchema.parse(settings)) === JSON.stringify(old)) {
+    const next = SettingsSchema.parse(settings)
+    if (JSON.stringify(next) === JSON.stringify(old)) {
       const delivery = await sessions.delivery(`settings:${block}`)
       return { saved: true, revision: store.blockRevision(block), policy_changed: false, restarting: false, context_delivery: delivery }
+    }
+    // A panel save is written back to this instance's own declarative file before the store commits, so a failed or
+    // conflicting write fails the whole save instead of leaving a value that a restart would revert.
+    if (origin === 'panel' && this.host.declarative) {
+      const base = block.startsWith('source:') ? ['sources', block.slice('source:'.length)] : [block]
+      const source = block.startsWith('source:') ? block.slice('source:'.length) : undefined
+      const before = source === undefined ? old[block as 'policy' | 'eval' | 'executor'] : old.sources[source]
+      const after = source === undefined ? next[block as 'policy' | 'eval' | 'executor'] : next.sources[source]
+      this.host.declarative.write(base, before, after)
     }
     const restarting = setupChanged(old, settings) || !this.host.setup.configured()
     const before = policyVersion(old), after = policyVersion(settings)

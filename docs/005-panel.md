@@ -1,6 +1,6 @@
 # 005 Panel
 
-Open **Superagent** in the DeepSeek Harness Web sidebar to supervise the agent. The panel prioritizes work that needs a person, then system health and history. This document builds on [000 Philosophy](000-philosophy.md) through [004 Prompts](004-prompts.md).
+Open **DSH-Superagent** in the DeepSeek Harness Web sidebar to supervise the agent. The panel prioritizes work that needs a person, then system health and history. This document builds on [000 Philosophy](000-philosophy.md) through [004 Prompts](004-prompts.md).
 
 ## Three questions
 
@@ -16,7 +16,7 @@ The tabs follow the workflow: **Overview**, **Source**, **Trigger**, **Eval**, *
 
 | Tab | Shows |
 | --- | --- |
-| Overview | Tickets needing action, system problems, activity counts for the last 24 hours, and Executor load. Each block links to its detailed page |
+| Overview | Tickets needing action, system problems, activity counts for the last 24 hours, and Executor load. Each block links to its detailed page. On a browser that has not dismissed it, the page opens with a three-step card - connect a Source, hand over one ticket, read the reply back - which is a card and not a dialog, so nothing below it is unreachable |
 | Source | Source state, setup problems and non-zero counts. Filtered Triggers and dropped messages cover the same 24-hour window as Overview |
 | Trigger | Threads filtered by Subscribed, Evaluating, New Triggers in 24 h, or All Threads. Each Thread shows its Triggers newest first, Decisions and Subscriptions |
 | Eval | Decisions with their reason and matched rules |
@@ -34,7 +34,7 @@ Ticket details show the originating Trigger, Decision and reason, scope and Poli
 ## Settings groups
 
 - **Sources:** one card per Source with its switch, fields and verified account facts. GitHub also offers receive-all switches for new Issues, pull requests, comments and default-branch CI. Polling and read limits are under Advanced.
-- **Eval:** the Policy version and rules, followed by **On each Source** and the Eval settings. Each Source tab contains its allowed list, membership sync, admission table and bot list. Sync runs at startup and on **Sync now**. The admission table distinguishes receiving scope, sender membership and whether the message addresses the agent. Eval settings select the accept mode, timeout and assessment model.
+- **Eval:** the Policy version and rules, followed by **On each Source** and the Eval settings. Each Source tab answers three plain questions: who may hand work over through it, which messages open work by themselves, and which are only recorded. The answers are the admission table, kept beside them under **Advanced: the admission table cell by cell** — both write the same `admission` cells, and a scope that receives a kind of message never offers a question about it. The roster is that Source's own identities; kinds with an external list (Feishu chats) sync it at startup and on **Sync now**. Eval settings select the accept mode, timeout and assessment model, and the recorded group names the mode its candidates follow.
 - **Execution:** worker model, concurrency, directory root, prepare command and blocked commands. Clicking an available variable inserts it into the prepare command.
 - **Prompts:** **Edit** changes team sections, built-in parts and skills. **Full prompt** shows the assembled text and compares it with saved text or defaults. **History** lists versions. Edited built-in parts are marked changed and can be reset; templates list their required placeholders.
 

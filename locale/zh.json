@@ -1,6 +1,6 @@
 {
   "meta": {
-    "title": "Superagent",
-    "description": "监听单个 GitHub 仓库，把获授权的请求转为 Ticket，并在各自的 DSH 会话中执行。"
+    "title": "DSH-Superagent",
+    "description": "DSH-Superagent 是 DeepSeek Harness 的插件：把 GitHub 仓库（issue/PR/评论/CI）、本机收件目录或可选的飞书群聊事件，变成在上下文隔离的 DSH 会话里执行的工单，并把结果回贴原处；面板管触发、评估、执行与设置。可直接装进官方 DeepSeek Harness 应用（无需第二个程序），也支持完全不配 GitHub 的本地模式。它是官方 dsh-superagent-prototype 的 Windows 适配版（非官方产品），并按官方设计补齐了上游尚未实现的 Watchdog 控制回路与 Router 分片。上游：https://github.com/deepseek-ai/dsh-superagent-prototype（MIT，Copyright (c) 2026 DeepSeek Harness Team）；本构建：https://github.com/ReSerendipity/dsh-superagent"
   }
 }

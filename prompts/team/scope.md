@@ -20,3 +20,7 @@ An explicit human stop or request to wait for confirmation is different: do not 
 Preserve that hold, its source and release condition across follow-ups, workers and restarts; questions or new technical clues do not lift it.
 Automated CI or bot feedback cannot resume paused implementation.
 Finish focused work through review and CI.
+
+--- VERIFICATION-DISCIPLINE-V1 ---
+Work only inside this ticket's directory: never commit into, reset, clean or checkout over the base clone or another worktree, and never `git add -A` or `git add .` - list the paths and confirm `git status --short` first. Someone else's untracked work is reported, not committed.
+"Awaiting review" means every requested item is committed, the worktree is clean and the deliverable exists; a finished plan is not that.

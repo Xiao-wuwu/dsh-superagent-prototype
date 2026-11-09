@@ -37,7 +37,12 @@ interface Skill { name: string; description: string; content: string }
  * Maximum combined character count of system prompt and tool definitions per role (~5% above baseline).
  * Lower this limit when shrinking model-facing text; raise it only intentionally and explain why in the commit message.
  */
-const BUDGET: Record<Role, number> = { orchestrator: 59_000, worker: 40_500 }
+// Measured on the shipped defaults, without the team verification discipline:
+// orchestrator 58_551, worker 40_341 - so the old caps left 449 and 159 characters of headroom, which is no room at
+// all for a rule set. That discipline held only in a profile's own prompt revisions, so a fresh
+// install silently lost it; shipping it in prompts/team/* costs 1_572 characters per request for both roles, and these
+// caps moved to 61_000 and 42_500 to pay for it. The guard still applies to anything added after this.
+const BUDGET: Record<Role, number> = { orchestrator: 61_000, worker: 42_500 }
 const PROMPTS = 'prompts/, skills/', TOOLS = 'src/app/tools/', SESSIONS = 'src/app/sessions.ts'
 const NOTICES = 'src/app/notices.ts', LINKS = 'src/app/links.ts', ASSESSMENT = 'src/app/assessment.ts'
 const EXECUTOR = 'src/executor/dsh.ts', ERRORS = 'src/core/errors.ts'

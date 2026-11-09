@@ -1,10 +1,10 @@
 # 004 Prompts
 
-This document explains what the agents read, what a team can edit, and when changes take effect. It builds on [000 Philosophy](000-philosophy.md) through [003 Execution](003-execution.md). Prompt text is written in English.
+This document explains what the agents read, what a team can edit, and when changes take effect. It builds on [000 Philosophy](000-philosophy.md) through [003 Execution](003-execution.md). Built-in prompt text is written in English; the optional style presets for the three team sections are written in Chinese.
 
 ## What a team writes
 
-A team can edit three team sections, add skills, and override every built-in system-prompt part. Most defaults live under `prompts/` and `skills/`. Tool descriptions, notices and cards remain in code and cannot be edited through prompt settings.
+A team can edit three team sections, add skills, and override every built-in system-prompt part. The panel also offers style presets that fill the three sections at once (极简中文 / 详细带证据 / 只报结果): a preset carries only the style, while the lines that keep tickets safe are attached from one place in `src/app/prompt-presets.ts`, and any edit makes the text the team's own rather than a preset. Most defaults live under `prompts/` and `skills/`. Tool descriptions, notices and cards remain in code and cannot be edited through prompt settings.
 
 | Section | Holds |
 | --- | --- |

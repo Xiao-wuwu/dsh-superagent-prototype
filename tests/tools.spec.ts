@@ -350,6 +350,12 @@ it('reads a ticket with the ids it is tied to, its reports by assignment, and it
   const transcript = JSON.parse((await read(`ticket/${ticket.id}/transcript`) as { text: string }).text) as { preview: string; read: string }
   expect(transcript).toMatchObject({ preview: expect.stringMatching(/^I fixed the margin\./), read: `ticket/${ticket.id}/message/0` })
   expect(transcript.preview.length).toBeLessThanOrEqual(80)
+  // DSH 0.2.2 dropped inspect() and hands out browser-wire events from page(); the same read must work there.
+  ;(h.controller as unknown as Record<string, unknown>).page = vi.fn(async () => ({ hasMore: false, cursor: 1, records: [{ type: 'event',
+    event: { type: 'assistant/message', data: { message: { role: 'assistant', content: [{ type: 'text', text: 'Page fallback works.' }] } } } }] }))
+  vi.mocked(h.controller.inspect).mockRejectedValueOnce(new Error('inspect() is gone in DSH 0.2.2'))
+  const viaPage = JSON.parse((await read(`ticket/${ticket.id}/transcript`) as { text: string }).text) as { preview: string }
+  expect(viaPage.preview).toMatch(/^Page fallback works\./)
 })
 
 it('reads a trigger once with the message it replies to and the messages around it on its thread, without the CI runs', async () => {

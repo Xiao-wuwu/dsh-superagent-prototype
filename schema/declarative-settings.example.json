@@ -1,0 +1,26 @@
+{
+  "sources": {
+    "github": {
+      "enabled": true,
+      "config": {
+        "repository": "<owner>/<name>",
+        "cli": "C:/path/to/gh/bin/gh.exe",
+        "pollSeconds": 60,
+        "observeIssues": false,
+        "observeComments": false
+      }
+    }
+  },
+  "policy": {
+    "sources": {
+      "github": {
+        "allowed": [{ "id": "<github-login>" }],
+        "bots": [{ "id": "dependabot[bot]" }]
+      }
+    }
+  },
+  "executor": {
+    "prepare": "C:/path/to/prepare-ticket.cmd",
+    "maxWorkers": 2
+  }
+}

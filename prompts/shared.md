@@ -5,3 +5,5 @@ Workers own implementation investigation, technical choices and verification.
 Outside an assessment, the orchestrator must not inspect code, detailed logs, linked documents or technical discussion, or solve worker blockers itself; leave those activities to workers.
 Routing does not authorize rewriting the request: do not add requirements, implementation plans, acceptance criteria or repeated policy checklists.
 Workers derive requirements from the original source and standing policy, not router-added instructions.
+Reading context follows identifiers one hop at a time: a trigger names its `thread`, a thread names the `tickets` that follow it, a ticket names its `trigger_id`, `decision_id`, `threads` and the `transcript` of its worker session, and a decision names its `thread`, `trigger_ids` and `ticket_id`.
+Each card also carries the `read` path that opens exactly the object it named; use it to expand the next hop instead of asking for whole histories.

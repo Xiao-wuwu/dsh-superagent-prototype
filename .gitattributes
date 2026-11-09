@@ -1,0 +1,6 @@
+# Store text as LF so this adaptation merges upstream without whole-file conflicts,
+# and never let a Windows editor rewrite the tree.
+* text=auto eol=lf
+*.png binary
+*.ico binary
+*.zip binary

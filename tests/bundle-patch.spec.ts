@@ -6,6 +6,11 @@ import { expect, it } from 'vitest'
 import { ROUTER_PRESET, WORKER_PRESET } from '../src/app/sessions.ts'
 
 interface Row { id?: string; name: string; disabled?: unknown; config?: Record<string, unknown> & { plugins?: Row[] } | Row[] }
+/** The rows of the base bundle this patch addresses by id, as a profile composes them before applying it. */
+const baseRows = (): Row[] => [
+  { id: 'storage-json', name: '@deepseek-ai/dsh-storage-json', config: { root: '/base/storages' } },
+  { id: 'session-persistence-jsonl', name: '@deepseek-ai/dsh-session-persistence-jsonl', config: { root: '/base/sessions' } },
+]
 /** The patch as DSH reads it: Cordis's include plugin parses `!!js` scalars, and applies the inserts to an entry list. */
 async function patched(): Promise<Row[]> {
   const cordis = createRequire(createRequire(import.meta.url).resolve('@deepseek-ai/cordis/package.json'))
@@ -15,7 +20,7 @@ async function patched(): Promise<Row[]> {
   const yaml = await import(createRequire(include).resolve('js-yaml')) as { load(text: string, options: { schema: unknown }): unknown }
   const patches = yaml.load(readFileSync(join(import.meta.dirname, '..', 'cordis.patch.yml'), 'utf8'), { schema: entryListSchema }) as unknown[]
   const warnings: string[] = []
-  const rows = applyEntryPatches([], patches, message => { warnings.push(message) })
+  const rows = applyEntryPatches(baseRows(), patches, message => { warnings.push(message) })
   expect(warnings).toEqual([])
   return rows
 }
@@ -26,10 +31,19 @@ const flat = (rows: readonly Row[]): Row[] => rows.flatMap(row => [row, ...Array
 const presetOf = (rows: readonly Row[], id: string) => rows.map(row => row.config as { id?: string; order?: number; plugins: Row[] })
   .find(config => config?.id === id)!
 
+it('replaces the base root of the workspace and session stores with the per-instance expression', async () => {
+  const rows = await patched()
+  const configOf = (id: string) => rows.find(row => row.id === id)!.config as Record<string, unknown>
+  expect(Object.keys(configOf('storage-json'))).toEqual(['root'])
+  expect(Object.keys(configOf('session-persistence-jsonl'))).toEqual(['root'])
+  expect(configOf('storage-json').root).not.toBe('/base/storages')
+  expect(configOf('session-persistence-jsonl').root).not.toBe('/base/sessions')
+})
+
 it('defines the worker preset Executor Sessions run under, with a shell that moves long commands to the background', async () => {
   const rows = await patched()
-  expect(rows.map(row => row.id)).toEqual(['dsh-superagent', 'dsh-superagent-github', 'dsh-superagent-feishu', 'dsh-superagent-worker-preset',
-    'dsh-superagent-router-preset'])
+  expect(rows.map(row => row.id)).toEqual(['storage-json', 'session-persistence-jsonl', 'dsh-superagent', 'dsh-superagent-github', 'dsh-superagent-feishu', 'dsh-superagent-inbox',
+    'dsh-superagent-worker-preset', 'dsh-superagent-router-preset'])
   const preset = presetOf(rows, WORKER_PRESET)
   expect(preset.id).toBe(WORKER_PRESET)
   const plugins = flat(preset.plugins)
@@ -60,6 +74,11 @@ it('defines the router preset the main Session runs under: the worker\'s 5-secon
   for (const name of ['@deepseek-ai/dsh-bash-sandbox', '@deepseek-ai/dsh-pwsh-sandbox', '@deepseek-ai/dsh-tool-jobs']) {
     expect(named(plugins, name), name).toEqual(named(flat(worker.plugins), name))
   }
+  // Full duplex (article §4.1): both presets must move a long command to a background job after five seconds and
+  // must not spend more than five seconds waiting on one, so the Router keeps answering while work runs.
+  expect(named(plugins, '@deepseek-ai/dsh-bash-sandbox')).toEqual([{ timeoutMs: 5000, maxTimeoutMs: 5000 }])
+  expect(named(plugins, '@deepseek-ai/dsh-pwsh-sandbox')).toEqual([{ timeoutMs: 5000, maxTimeoutMs: 5000 }])
+  expect(named(plugins, '@deepseek-ai/dsh-tool-jobs')).toEqual([{ waitTimeoutMs: 5000, maxWaitTimeoutMs: 5000 }])
   // The tools its allow list keeps: skill, bash, read, read_image and the job tools; the file tools only read.
   for (const name of ['@deepseek-ai/dsh-tool-skill', '@deepseek-ai/dsh-skill-filesystem', '@deepseek-ai/dsh-tool-bash', '@deepseek-ai/dsh-tool-jobs',
     '@deepseek-ai/dsh-agent-instructions', '@deepseek-ai/dsh-time-context', '@deepseek-ai/dsh-compaction-basic',

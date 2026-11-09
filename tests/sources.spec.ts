@@ -23,6 +23,9 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
+// The Feishu consumer tests drive fake lark-cli event streams, which are POSIX scripts.
+const WINDOWS = process.platform === 'win32'
+
 const MEMBER = 'ou_alice'
 function host(overrides: Partial<SourceContextDeps> = {}) {
   const store = new Store(join(mkdtempSync(join(tmpdir(), 'sources-')), 'db.sqlite'))
@@ -1026,7 +1029,7 @@ it('reports GitHub as failing only after the configured number of consecutive fa
   expect(githubKind.schema.parse({})).toEqual({ repository: '', cli: '', pollSeconds: 60, failuresBeforeError: 3, observeIssues: false,
     observePulls: false, observeComments: false, observeCi: false })
 })
-describe('feishu event consumer', () => {
+describe.skipIf(WINDOWS)('feishu event consumer', () => {
   let dir: string
   let controller: AbortController
   let running: Promise<unknown> | undefined

@@ -1,0 +1,32 @@
+# 依赖更新：github-actions 与 npm。
+# 口径来自治理标准 §12.5 / §19.1：cooldown.default-days >= 7（避开上游刚发布即升级的投毒窗口，
+# 安全补丁不受冷却影响）；github-actions 生态的 cooldown 只支持 default-days，写 semver-*-days 会被判配置非法。
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    labels: [dependencies]
+    groups:
+      minor-and-patch:
+        applies-to: version-updates
+        update-types: [minor, patch]
+        patterns: ["*"]
+
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: monthly
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    labels: [dependencies]
+    groups:
+      minor-and-patch:
+        applies-to: version-updates
+        update-types: [minor, patch]
+        patterns: ["*"]

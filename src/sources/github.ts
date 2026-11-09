@@ -112,12 +112,17 @@ export const inject = ['orchestrator']
 export function apply(ctx: Context): void {
   ctx.effect(() => ctx.orchestrator.sources.register(githubKind), 'github: source kind')
   ctx.effect(() => {
-    const source = sourceContext(ctx.orchestrator, githubKind)
     const controller = new AbortController()
-    // Unhandled rejections terminate the DSH process, so a failure escaping the polling loop is reported as source health instead.
-    const running = watch(source, controller.signal)
-      .catch((error: unknown) => { source.report('github', { state: 'error', detail: String(error) }) })
-    return async () => { controller.abort(); await running }
+    // One polling loop per configured instance, so two repositories poll independently and report their own health.
+    const running = ctx.orchestrator.sources.instances()
+      .filter(instance => instance.kind === githubKind.kind && instance.installed)
+      .map(instance => {
+        const source = sourceContext(ctx.orchestrator, githubKind, instance.id)
+        // Unhandled rejections terminate the DSH process, so a failure escaping a polling loop is reported as source health instead.
+        return watch(source, controller.signal)
+          .catch((error: unknown) => { source.report('github', { state: 'error', detail: String(error) }) })
+      })
+    return async () => { controller.abort(); await Promise.all(running) }
   })
 }
 /** Returns an error health once `failures` consecutive polls fail, or undefined so a single network interruption stays quiet. */
@@ -128,8 +133,14 @@ async function watch(ctx: SourceContext, signal: AbortSignal): Promise<void> {
   let interval = 60
   let failures = 0
   await ctx.ready
-  // Setup restarts dsh-superagent once it resolves the accounts; until then nothing is polled.
-  if (!ctx.configured()) { ctx.report('github', health('paused', 'setupPending')); return }
+  // The loop starts when the plugin mounts, which is before setup resolves the accounts. Wait for setup instead of
+  // returning: a loop that gave up could never be restarted without a process restart, and with several instances
+  // only some of them would get a fresh loop.
+  while (!ctx.configured()) {
+    if (signal.aborted) return
+    ctx.report('github', health('paused', 'setupPending'))
+    await pause(1000, signal)
+  }
   while (!signal.aborted) {
     const config = ctx.config<GithubConfig>(SOURCE)
     try {

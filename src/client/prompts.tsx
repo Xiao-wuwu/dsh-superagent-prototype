@@ -3,12 +3,12 @@ import { Fragment, useCallback, useEffect, useState, type FormEvent, type ReactN
 import type { ApiResponse } from '../app/api.ts'
 import type { PromptConfig, PromptsView } from './api.ts'
 import { SaveBar, useDraft, type DraftWords } from './draft.tsx'
-import { changedSections, isPart, isSkill, lineDiff, partKey, partText, partWith, sectionLabel, sectionText, skillNameFree, withOverride,
-  withOverrides, withSection, withoutSkill, type BuiltInPart, type DiffLine } from './prompt-config.ts'
+import { changedSections, isPart, isSkill, lineDiff, partKey, partText, partWith, sectionLabel, sectionText, skillNameFree, styleOf,
+  withOverride, withOverrides, withPreset, withSection, withoutSkill, type BuiltInPart, type DiffLine } from './prompt-config.ts'
 import { useAction, usePanel } from './provider.tsx'
-import { errorText, valueLabel, when, type T } from './text.ts'
+import { errorText, localized, valueLabel, when, type T } from './text.ts'
 import { Hint, LoadState } from './widgets.tsx'
-import { Button, Icon, Input, SegmentedControl } from './controls.tsx'
+import { Button, Icon, InfoTip, Input, Pill, SegmentedControl } from './controls.tsx'
 
 type Tab = 'edit' | 'full' | 'history'
 type Origin = { revision: number } | 'defaults' | { reset: string }
@@ -67,6 +67,20 @@ function PromptsEditor({ view, reload }: { view: PromptsView; reload: () => Prom
   </div>
 }
 
+/** The style a person picks instead of writing the three sections out: it fills them, and stays editable. */
+function PresetBar({ config, view, onEdit }: { config: PromptConfig; view: PromptsView; onEdit: (next: PromptConfig, note?: PromptNote) => void }) {
+  const { t } = usePanel()
+  const style = styleOf(config, view)
+  const label = (item: PromptsView['presets'][number]) => localized(t, item.label)
+  return <div className="dt-preset-bar">
+    <span className="dt-field-head">{t('promptPresets')}<InfoTip text={t('promptPresetsHint')} /></span>
+    <span className="dt-preset-options">{view.presets.map(item => <Pill key={item.id} active={style.kind === 'preset' && style.id === item.id}
+      onClick={() => onEdit(withPreset(config, view, item.id))}>{label(item)}</Pill>)}</span>
+    <span className="dt-preset-current">{style.kind === 'default' ? t('promptStyleDefault')
+      : style.kind === 'custom' ? t('promptStyleCustom') : `${t('promptStylePreset')} ${label(view.presets.find(item => item.id === style.id)!)}`}</span>
+  </div>
+}
+
 function PromptSections({ config, view, changed, selected, onSelect, onEdit }: {
   config: PromptConfig; view: PromptsView; changed: string[]; selected: string; onSelect: (name: string) => void
   onEdit: (next: PromptConfig, note?: PromptNote) => void
@@ -85,7 +99,9 @@ function PromptSections({ config, view, changed, selected, onSelect, onEdit }: {
     onEdit(withSection(config, section, ''), { selection: section }); onSelect(section)
   }
   const part = isPart(selected) ? view.parts.find(item => item.key === partKey(selected)) : undefined
-  return <div className="dt-prompt">
+  return <>
+    <PresetBar config={config} view={view} onEdit={onEdit} />
+    <div className="dt-prompt">
     <nav className="dt-prompt-nav" aria-label={t('promptSections')}>
       <div className="dt-nav-group">{t('promptTeamGroup')}</div>
       {view.sections.map(section => item(section, <>
@@ -109,7 +125,8 @@ function PromptSections({ config, view, changed, selected, onSelect, onEdit }: {
     </nav>
     {part ? <BuiltInEditor config={config} view={view} part={part} onEdit={onEdit} />
       : <TeamEditor config={config} view={view} selected={selected} onSelect={onSelect} onEdit={onEdit} />}
-  </div>
+    </div>
+  </>
 }
 /** Whether an override was edited from a built-in text that has changed since. */
 const updated = (config: PromptConfig, part: BuiltInPart): boolean => {

@@ -12,12 +12,25 @@ import { SetupError } from '../setup.ts'
 import { CliError } from './commands.ts'
 
 const MARKER = '# Written by dsh-superagent on every start; edits are lost.'
+/**
+ * Some networks drop github.com:443 while ssh.github.com:443 stays reachable, which would make every worker
+ * `git fetch` fail even though the GitHub API (api.github.com) works. Setting SUPERAGENT_GIT_SSH=1 rewrites the
+ * github.com HTTPS URLs worker git uses to SSH, so the transport can follow the network without touching accounts.
+ */
+const sshTransport = (): boolean => process.env.SUPERAGENT_GIT_SSH === '1'
 /** Markers of files written under the project's earlier names (`dsh-tag`, `dsh-go`, `dsh-freelancer`), which `dsh-superagent` owns and replaces too. */
 const LEGACY_MARKERS = ['dsh-tag', 'dsh-go', 'dsh-freelancer'].map(name => `# Written by ${name} on every start; edits are lost.`)
+/** Windows needs batch shims and drive-qualified paths; every other platform keeps the POSIX forms below. */
+const windows = process.platform === 'win32'
 /** Commands workers need, which `blockedCommands` cannot block: the shims and git. */
 export const WORKER_COMMANDS: readonly string[] = ['gh', 'git', 'lark-cli']
 export const workerBin = (stateDir: string): string => join(stateDir, 'worker-bin')
 export const workerGitConfig = (stateDir: string): string => join(stateDir, 'worker-gitconfig')
+/**
+ * The agent's own GitHub CLI configuration directory. Windows selects the agent account through GH_CONFIG_DIR because
+ * Node refuses to spawn a `.cmd` wrapper (`spawn EINVAL`), so the upstream wrapper-script trick cannot be the CLI here.
+ */
+export const agentGhConfig = (stateDir: string): string => join(stateDir, 'gh-config')
 const shellQuote = (value: string): string => `'${value.replaceAll("'", "'\\''")}'`
 const gitQuote = (value: string): string => `"${value.replace(/[\\"]/g, char => `\\${char}`)}"`
 export const credentialHelper = (cli: string): string => `!${shellQuote(cli)} auth git-credential`
@@ -45,6 +58,8 @@ export const GIT_LOCATION: readonly string[] = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT
 export function agentVariables(stateDir: string): Record<string, string | undefined> {
   return {
     GH_TOKEN: undefined, GITHUB_TOKEN: undefined,
+    // Select the agent account by configuration directory: a `.cmd` wrapper cannot be spawned by Node on Windows.
+    ...windows ? { GH_CONFIG_DIR: agentGhConfig(stateDir) } : {},
     // A worker's git finds the repository from its directory, never from the host's environment.
     ...Object.fromEntries(GIT_LOCATION.map(name => [name, undefined])),
     GIT_CONFIG_GLOBAL: workerGitConfig(stateDir), GIT_CONFIG_NOSYSTEM: '1',
@@ -60,7 +75,8 @@ export function agentVariables(stateDir: string): Record<string, string | undefi
 /** True when a regular file starts with the dsh-superagent marker in its first two lines; a symbolic link, directory, or other non-regular file never counts as written by dsh-superagent. */
 async function written(file: string): Promise<boolean> {
   if (!(await lstat(file)).isFile()) return false
-  const head = (await readFile(file, 'utf8')).split('\n', 2)
+  // Windows shims are batch files, where a `#` comment would be executed; they carry the same marker behind `@REM`.
+  const head = (await readFile(file, 'utf8')).split(/\r?\n/, 2).map(line => line.replace(/^@rem\s+/i, ''))
   return [MARKER, ...LEGACY_MARKERS].some(marker => head.includes(marker))
 }
 async function own(file: string, text: string, mode = 0o644): Promise<void> {
@@ -80,27 +96,49 @@ export async function writeEnvironment(deployment: Pick<Deployment, 'stateDir' |
   const { stateDir, repository, github, feishu } = deployment
   const dir = workerBin(stateDir)
   await mkdir(dir, { recursive: true })
+  await mkdir(agentGhConfig(stateDir), { recursive: true })
   const before = await readdir(dir)
   for (const name of before) { const file = join(dir, name); if (!await written(file)) throw new SetupError('foreignFile', { file }) }
   // Workers may be running concurrently: write each shim to a temp file and atomically rename it so no command ever resolves past the shim directory.
   const kept = new Set<string>()
   const shim = async (name: string, body: string): Promise<void> => {
+    const entry = windows ? `${name}.cmd` : name
     const temporary = join(dir, `.${name}.${process.pid}.tmp`)
-    await writeFile(temporary, `#!/bin/sh\n${MARKER}\n${body}\n`, { mode: 0o755 })
-    await rename(temporary, join(dir, name))
-    kept.add(name)
+    // A batch file is reachable through PATHEXT; an extensionless `#!/bin/sh` file is invisible to a Windows PATH lookup.
+    const text = windows ? `@echo off\r\n@REM ${MARKER}\r\n${body}\r\n` : `#!/bin/sh\n${MARKER}\n${body}\n`
+    await writeFile(temporary, text, { mode: windows ? 0o644 : 0o755 })
+    await rename(temporary, join(dir, entry))
+    kept.add(entry)
   }
   const withoutShims = [
     `self=${shellQuote(dir)}`, 'rest=', 'IFS=:', 'set -f',
     'for entry in $PATH; do [ "$entry" = "$self" ] || rest="${rest:+$rest:}$entry"; done',
     'set +f', 'unset IFS', 'PATH=$rest', 'export PATH',
   ].join('\n')
-  const run = (program: string): string => `${withoutShims}\nexec ${shellQuote(program)} "$@"`
-  const fail = (message: string): string => `echo ${shellQuote(message)} >&2\nexit 1`
-  await shim('gh', run(github.cli))
+  // A batch shim cannot strip PATH as the POSIX one does, so it must call the real executable by absolute path: a
+  // name-based call inside the configured wrapper would re-enter this shim, and Node refuses to spawn a `.cmd` anyway.
+  // The batch twin of `withoutShims`: a wrapper script that resolves `gh` or `lark-cli` by name must reach the real
+  // binary, never this shim again. `%%~dp0` ends with a separator, so the last character is dropped for the comparison.
+  const withoutShimsWindows = [
+    'set "_SELF=%~dp0"',
+    'if "%_SELF:~-1%"=="\\" set "_SELF=%_SELF:~0,-1%"',
+    'setlocal EnableDelayedExpansion',
+    'set "_NEW="',
+    'for %%P in ("!PATH:;=" "!") do if /I not "%%~P"=="!_SELF!" set "_NEW=!_NEW!;%%~P"',
+    'endlocal & set "PATH=%_NEW:~1%"',
+  ].join('\r\n')
+  const run = (program: string): string => windows
+    ? `${withoutShimsWindows}\r\n"${program}" %*\r\nexit /b %ERRORLEVEL%`
+    : `${withoutShims}\nexec ${shellQuote(program)} "$@"`
+  const fail = (message: string): string => windows
+    ? `>&2 echo ${message}\r\nexit /b 1`
+    : `echo ${shellQuote(message)} >&2\nexit 1`
+  if (github.cli) await shim('gh', run(github.cli))
   await shim('lark-cli', feishu ? run(feishu.cli) : fail('lark-cli is unavailable: this installation has no Feishu bot.'))
   for (const name of new Set(blockedCommands.filter(name => !WORKER_COMMANDS.includes(name)))) {
-    await shim(name, fail(`${name} is blocked in this installation; use gh, which acts as ${github.login}.`))
+    await shim(name, fail(github.login
+      ? `${name} is blocked in this installation; use gh, which acts as ${github.login}.`
+      : `${name} is blocked in this installation.`))
   }
   for (const name of before) if (!kept.has(name)) await unlink(join(dir, name))
   await own(workerGitConfig(stateDir), [
@@ -108,8 +146,14 @@ export async function writeEnvironment(deployment: Pick<Deployment, 'stateDir' |
     // Make git refuse to commit without an explicit identity set by the worker instead of guessing from the operator's OS user.
     '[user]', '\tuseConfigOnly = true',
     '[credential]', '\thelper =',
-    '[credential "https://github.com"]', `\thelper = ${gitQuote(credentialHelper(github.cli))}`,
-    '[url "https://github.com/"]', '\tinsteadOf = git@github.com:', '\tinsteadOf = ssh://git@github.com/',
+    // No GitHub Source: nothing is pushed to or fetched from github.com, so a credential helper and the
+    // SSH rewrites would only describe a remote this installation does not have.
+    ...github.cli ? [
+      '[credential "https://github.com"]', `\thelper = ${gitQuote(credentialHelper(github.cli))}`,
+      '[url "https://github.com/"]', '\tinsteadOf = git@github.com:', '\tinsteadOf = ssh://git@github.com/',
+      // Opt-in: send the HTTPS URLs git would use over SSH instead, for networks that block github.com:443.
+      ...sshTransport() ? ['[url "ssh://git@github.com/"]', '\tinsteadOf = https://github.com/'] : [],
+    ] : [],
     // Include Git LFS filters because the operator's global gitconfig (which usually holds them) is ignored.
     '[filter "lfs"]', '\tclean = git-lfs clean -- %f', '\tsmudge = git-lfs smudge -- %f', '\tprocess = git-lfs filter-process', '\trequired = true',
   ].join('\n') + '\n')
@@ -126,7 +170,13 @@ export function applyEnvironment(variables: Record<string, string | undefined>, 
 
 /** Spawns a command through the DSH subprocess runtime, which strips credential-shaped environment variables. */
 export async function runAsWorker(subprocess: SubprocessRuntime, argv: string[], cwd: string, signal: AbortSignal, env?: Record<string, string>): Promise<string> {
-  const handle = subprocess.spawn({ argv, cwd, graceMs: 2000, signal, ...env ? { env } : {}, stdio: { stdin: 'ignore', stdout: { maxBytes: 1 << 20 }, stderr: { maxBytes: 1 << 16 } } })
+  // Node refuses to spawn `.cmd`/`.bat` directly (the CVE-2024-27980 hardening), so a batch wrapper CLI — the account model
+  // docs/006-deployment.md describes — is handed to cmd.exe, which is also the only place its quoting rules apply.
+  const batch = process.platform === 'win32' && /\.(cmd|bat)$/i.test(argv[0] ?? '')
+  // Hand the program and its arguments as SEPARATE argv entries: Node then quotes each one for cmd, whereas joining
+  // them into one command line lets cmd re-parse the quotes and hand the program literal backslash-quotes.
+  const spawnArgv = batch ? ['cmd.exe', '/d', '/c', argv[0]!, ...argv.slice(1)] : argv
+  const handle = subprocess.spawn({ argv: spawnArgv, cwd, graceMs: 2000, signal, ...env ? { env } : {}, stdio: { stdin: 'ignore', stdout: { maxBytes: 1 << 20 }, stderr: { maxBytes: 1 << 16 } } })
   const { exitCode } = await handle.done
   const read = (reader: SubprocessOutputReader | undefined): string => reader?.readFrom(0).text ?? ''
   if (exitCode === 0) return read(handle.collected.stdout)
@@ -137,6 +187,8 @@ export async function runAsWorker(subprocess: SubprocessRuntime, argv: string[],
 /** Verifies that worker git invocations resolve the deployment's GitHub credential helper. */
 export async function verifyEnvironment(deployment: Pick<Deployment, 'github' | 'stateDir'>, subprocess: SubprocessRuntime, signal: AbortSignal): Promise<void> {
   const { github, stateDir } = deployment
+  // No GitHub Source: the worker git config was written without a credential helper, so there is nothing to compare.
+  if (!github.cli) return
   // `-z` separates fields with NUL and never quotes paths.
   const helpers = (await runAsWorker(subprocess, ['git', 'config', '-z', '--show-origin', '--get-all', 'credential.https://github.com.helper'], stateDir, AbortSignal.any([signal, AbortSignal.timeout(60_000)])).catch(() => '')).split('\0')
   if (helpers.join('\0') !== [`file:${workerGitConfig(stateDir)}`, credentialHelper(github.cli), ''].join('\0')) throw new SetupError('gitTooOld')

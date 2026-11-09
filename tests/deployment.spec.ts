@@ -1,11 +1,14 @@
 import { execFile } from 'node:child_process'
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { Config, executable, machineOf, resolveDeployment, resolveFeishuBot, type Machine, type Probe } from '../src/deployment.ts'
+import { Config, defaultStateDir, executable, localDeployment, machineOf, resolveDeployment, resolveFeishuBot, type Machine, type Probe } from '../src/deployment.ts'
 import { gitEnv } from './fixtures/git.ts'
+
+// These assert POSIX path rules or symlinks; Windows uses drive-qualified paths and needs a privilege for symlinks.
+const WINDOWS = process.platform === 'win32'
 
 const exec = promisify(execFile)
 let dir: string
@@ -40,8 +43,7 @@ afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
 vi.setConfig({ testTimeout: 30_000 })
 
 describe('configuration schema', () => {
-  it('requires only the state directory and reads the editable fields through references', () => {
-    expect(() => Config({})).toThrow('stateDir')
+  it.skipIf(WINDOWS)('reads the editable fields through references, and still rejects a malformed state directory', () => {
     const read = machineOf(Config({ stateDir: join(dir, 'state') }))
     // Limits are volatile references that the loader updates in place and callers read when used.
     expect({ ...read, promptMaxChars: read.promptMaxChars.get(), admissionContextMaxPages: read.admissionContextMaxPages.get(),
@@ -50,14 +52,35 @@ describe('configuration schema', () => {
     expect(() => Config(minimal({ stateDir: 'relative/dir' }))).toThrow()
     expect(() => Config(minimal({ stateDir: '~/dir' }))).toThrow()
   })
-  it('names keys the configuration does not define, and where the values of older keys live now', () => {
+  it.skipIf(WINDOWS)('names keys the configuration does not define, and where the values of older keys live now', () => {
     const raw = minimal({ repository: 'acme/widgets', repositoryPath: '/srv/widgets', blockedCommands: [], author: { name: 'Alice' }, extra: 1 })
     expect(() => machineOf(Config(raw))).toThrow('keys it does not use: repository (now on the GitHub Source), repositoryPath (now in the prepare command of the Execution settings), blockedCommands (now in the Execution settings), author (now prompt text), extra;')
   })
 })
 
+describe('derived state directory', () => {
+  // The default exists so a fresh install runs without the profile patch step, while each profile still locks its own
+  // directory (docs/006). An explicit `stateDir` must keep winning, and the historical `superagent` leaf must not move.
+  it('derives per profile, keeps the historical leaf, and loses to an explicit configuration', () => {
+    vi.stubEnv('DSH_HOME', dir)
+    try {
+      expect(machineOf(Config({})).stateDir).toBe(join(dir, 'state', 'superagent'))
+      expect(defaultStateDir('desktop')).toBe(join(dir, 'state', 'desktop-superagent'))
+      expect(defaultStateDir('superagent')).toBe(join(dir, 'state', 'superagent'))
+      expect(defaultStateDir()).toBe(join(dir, 'state', 'superagent'))
+      expect(machineOf(Config({}), defaultStateDir('desktop')).stateDir).toBe(join(dir, 'state', 'desktop-superagent'))
+      expect(machineOf(Config({ stateDir: join(dir, 'explicit') }), defaultStateDir('desktop')).stateDir).toBe(join(dir, 'explicit'))
+    } finally { vi.unstubAllEnvs() }
+  })
+  it('honors DSH_HOME the way dsh-home-paths does, falling back to the OS home', () => {
+    vi.stubEnv('DSH_HOME', '')
+    try { expect(defaultStateDir('desktop')).toBe(join(homedir(), '.dsh', 'state', 'desktop-superagent')) }
+    finally { vi.unstubAllEnvs() }
+  })
+})
+
 describe('setup', () => {
-  it('reads the repository from the GitHub Source and the accounts from their CLIs, skipping the worker shims', async () => {
+  it.skipIf(WINDOWS)('reads the repository from the GitHub Source and the accounts from their CLIs, skipping the worker shims', async () => {
     const deployment = await resolveDeployment(machine(), { repository: 'acme/widgets', cli: 'gh' }, probe, path)
     expect(deployment).toMatchObject({ repository: 'acme/widgets', github: { cli: join(dir, 'bin', 'gh'), login: 'Agent-Bot', noreply: '7+Agent-Bot@users.noreply.github.com' } })
     expect(deployment.github).toEqual({ cli: join(dir, 'bin', 'gh'), login: 'Agent-Bot', noreply: '7+Agent-Bot@users.noreply.github.com' })
@@ -65,7 +88,7 @@ describe('setup', () => {
     // A renamed repository is still resolved by its old name; notifications carry GitHub's current full_name.
     expect((await resolveDeployment(machine(), { repository: 'acme/gadgets', cli: 'gh' }, probe, path)).repository).toBe('acme/widgets')
   })
-  it('names what setup needs and where it is set', async () => {
+  it.skipIf(WINDOWS)('names what setup needs and where it is set', async () => {
     const needs = (place: string, code: string, values: Record<string, unknown>, github: unknown) =>
       expect(resolveDeployment(machine(), github, probe, path)).rejects.toEqual(setupError(place, code, values))
     const repository = 'acme/widgets'
@@ -83,7 +106,7 @@ describe('setup', () => {
     await needs('github', 'agentCliNoAccount', {}, { repository, cli: program(join(dir, 'bin', 'gh-anonymous'), `echo '{}'`) })
     expect(() => executable('nothing-here', join(dir, 'bin'))).toThrow('nothing-here is not an executable file on PATH')
   })
-  it('reads the Feishu bot from a bot-only lark-cli, or finds none when the Feishu Source names no CLI', async () => {
+  it.skipIf(WINDOWS)('reads the Feishu bot from a bot-only lark-cli, or finds none when the Feishu Source names no CLI', async () => {
     expect(await resolveFeishuBot(machine(), {}, probe, path)).toBeUndefined()
     expect(await resolveFeishuBot(machine(), { cli: 'lark-cli' }, probe, path)).toEqual({ cli: join(dir, 'bin', 'lark-cli'), appId: 'cli_bot', brand: 'lark', botId: 'ou_bot', name: 'Widgets Bot' })
     const refuses = async (code: string, values: Record<string, unknown> = {}) => expect(resolveFeishuBot(machine(), { cli: 'lark-cli' }, probe, path)).rejects.toEqual(setupError('feishu', code, values))
@@ -97,5 +120,21 @@ describe('setup', () => {
     await refuses('feishuNoBot')
     program(join(dir, 'bin', 'lark-cli'), 'echo "not configured" >&2; exit 1')
     await refuses('feishuCliFailed', { output: expect.stringContaining('not configured') })
+  })
+})
+
+describe('local mode', () => {
+  it('runs with no repository and no agent account', () => {
+    const deployed = localDeployment(machineOf(Config(minimal({ mode: 'local' }))))
+    expect(deployed.mode).toBe('local')
+    expect(deployed.repository).toBe('')
+    // Workers commit with `user.useConfigOnly`, so an identity has to exist; this one never reaches GitHub.
+    expect(deployed.github).toEqual({ cli: '', login: '', noreply: 'superagent@localhost' })
+  })
+  it('defaults to github, so an installation that already polls a repository is unchanged', () => {
+    expect(machineOf(Config(minimal())).mode).toBe('github')
+  })
+  it('rejects a mode it does not know instead of guessing', () => {
+    expect(() => Config(minimal({ mode: 'offline' }))).toThrow()
   })
 })

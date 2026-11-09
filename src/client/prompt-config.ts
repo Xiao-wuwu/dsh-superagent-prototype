@@ -35,6 +35,20 @@ export function withOverride(config: PromptConfig, part: BuiltInPart, text: stri
 export function withSection(config: PromptConfig, name: string, text: string): PromptConfig {
   return isSkill(name) ? { ...config, skills: { ...config.skills, [name.slice(6)]: text } } : { ...config, [name]: text }
 }
+/** What the three team sections currently carry: the built-in text, a preset as written, or a hand edit. */
+export type PromptStyle = { kind: 'default' } | { kind: 'preset'; id: string } | { kind: 'custom' }
+const sameSections = (config: PromptConfig, view: PromptsView, source: Record<TeamSection, string>): boolean =>
+  view.sections.every(name => config[name] === source[name])
+export function styleOf(config: PromptConfig, view: PromptsView): PromptStyle {
+  if (sameSections(config, view, view.defaults)) return { kind: 'default' }
+  const preset = view.presets.find(item => sameSections(config, view, item.sections))
+  return preset ? { kind: 'preset', id: preset.id } : { kind: 'custom' }
+}
+/** The draft with all three team sections set to a preset, keeping the skills and the part overrides. */
+export const withPreset = (config: PromptConfig, view: PromptsView, id: string): PromptConfig => {
+  const preset = view.presets.find(item => item.id === id)
+  return preset ? { ...config, ...preset.sections } : config
+}
 export function withoutSkill(config: PromptConfig, name: string): PromptConfig {
   const { [name.slice(6)]: _removed, ...skills } = config.skills
   return { ...config, skills }

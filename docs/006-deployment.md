@@ -77,7 +77,11 @@ npm install -g @deepseek-ai/dsh@0.2.1-rc.3
 git clone <this repository> dsh-superagent && cd dsh-superagent
 pnpm install && pnpm build
 dsh superagent --from-default-profile web --dump-config > /dev/null
-dsh plugin --profile superagent add "link:$PWD"
+# 安装方式：从构建仓库的 git 源安装（代码来源会显示该仓库）。
+# 需要本地开发循环时改回 link: 指向本机 checkout。
+# 从构建仓库安装（默认；装 main 当前最新提交）：
+dsh plugin --profile superagent add "git+https://github.com/ReSerendipity/dsh-superagent.git"
+# 或在本机 checkout 上开发：dsh plugin --profile superagent add "link:$PWD"
 ```
 
 The pinned version above is public; other versions must satisfy `engines.dsh` in `package.json`.
@@ -92,7 +96,9 @@ Copy [examples/profile.cordis.patch.yml](../examples/profile.cordis.patch.yml) t
 
 | Key | Required | Meaning |
 | --- | --- | --- |
-| `stateDir` | yes | Absolute path: the database, the lock, the command shims in `worker-bin`, the agent's git configuration and, by default, the Ticket directories in `work`. Back it up before upgrades |
+| `stateDir` | no | Absolute path: the database, the lock, the command shims in `worker-bin`, the agent's git configuration and, by default, the Ticket directories in `work`. Omitted, the plugin derives `<DSH home>/state/<profile>-superagent` (`state/superagent` for a profile named `superagent`, or when no profile context is available), keeping one locked directory per profile. An explicit value always wins, so existing deployments never move. Back it up before upgrades |
+| `mode` | no | `github` (default) polls the repository and delivers a branch, push and pull request; `local` installs no GitHub Source at all, takes tickets from the inbox, and delivers a commit on the ticket branch for a person to merge. See `docs/026` |
+| `configPath` | no | A JSON or YAML declarative settings file applied at startup and on save; omitted blocks keep the stored settings (`docs/009`) |
 | `promptMaxChars`, `admissionContextMaxPages`, `admissionContextTimeoutMs` | no | The largest saved prompt configuration, and how many Thread pages one assessment reads within what time |
 
 After the first start, edit machine limits in **Settings → Deployment** or the DeepSeek Harness Plugin Manager. Changes apply without restart. `stateDir` cannot be changed there. Invalid values or unknown configuration keys prevent startup; the log identifies the key.
@@ -128,7 +134,7 @@ Each profile stores logs and control files under `.artifacts/`:
 - Startup logs: `dsh-superagent-<profile>-<date>-<time>-<pid>.log`, where the pid belongs to the script. The newest 20 are kept.
 - Control files: `control/profiles/<profile>/`, containing the stop marker, lock and process id.
 
-Open the URL printed in the log, then choose **Superagent** in the sidebar.
+Open the URL printed in the log, then choose **DSH-Superagent** in the sidebar.
 
 ### Hourly check
 
@@ -158,7 +164,7 @@ Setup must succeed before polling or work starts. Overview lists missing require
 
 ### Management API
 
-The panel uses a local HTTP API that agents can also call. `SETUP.md` uses it to save settings, and the service script reads `GET state`.
+The panel uses a local HTTP API that agents can also call. `docs/SETUP.md` uses it to save settings, and the service script reads `GET state`.
 
 Send requests to `http://127.0.0.1:<port>/orchestrator/api/` with `x-orchestrator-request: 1`. The host must be `127.0.0.1:<port>` or `localhost:<port>`. Missing headers or an `Origin` from another site receive 403.
 

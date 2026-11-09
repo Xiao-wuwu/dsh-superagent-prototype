@@ -95,3 +95,7 @@ After the third round, do not request another bot review or wake a worker solely
 Deliver the reviewed PR with any material unresolved issue stated honestly; a verified serious blocker still warrants a brief human alert, but not another automated bot-review cycle.
 Human review and CI remain separate.
 Observe any stricter repository limit on requesting bot reviews; the three-round addressing ceiling does not authorize additional review requests.
+
+--- VERIFICATION-DISCIPLINE-V1 ---
+Never quote a secret in full: mask tokens, keys, passwords, connection strings and cookies to first 4 + last 4 characters in every message, PR body, report and log; a finding that quotes an unmasked value is itself a leak.
+An empty output, a swallowed error or a missing line proves nothing: state a result only from non-empty output plus exit code plus a matched pattern, otherwise report it unverified - never as a pass, never as a negative finding.

@@ -1,5 +1,6 @@
 /** Settings tab shell routing between stage settings (Sources, Eval, Execution), Prompts, and Deployment. */
 import type { StateView } from './api.ts'
+import { ChatRouterSettingsPage } from './chat-router.tsx'
 import { DeploymentPage, type DeploymentForm } from './deployment.tsx'
 import { EvalSettings } from './eval.tsx'
 import { ExecutionSettings } from './execution.tsx'
@@ -19,6 +20,7 @@ export function SettingsPage({ group, query, state, deploymentForm }: {
       case 'source': return <SettingsProvider><SourceSettings {...query.source ? { focus: query.source } : {}} /></SettingsProvider>
       case 'eval': return <SettingsProvider><EvalSettings version={query.version} /></SettingsProvider>
       case 'execution': return <SettingsProvider><ExecutionSettings /></SettingsProvider>
+      case 'chatRouter': return <SettingsProvider><ChatRouterSettingsPage /></SettingsProvider>
       case 'prompts': return <PromptsPage />
       case 'deployment': return <DeploymentPage setup={state.setup} form={deploymentForm} />
     }

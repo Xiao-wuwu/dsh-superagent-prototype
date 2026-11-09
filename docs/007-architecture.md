@@ -28,7 +28,7 @@ flowchart TB
 
 ### Runtime
 
-`Runtime` is the composition root; it contains no domain rules. Its constructor locks the state directory, opens the Store and builds each component. If construction fails, it closes the Store and releases the lock.
+`Runtime` is the composition root; it contains no domain rules. Its constructor locks the state directory, opens the Store and builds each component. If construction fails, it closes the Store and releases the lock. The lock keeps one backend per state directory, and a lock whose recorded holder is no longer alive is reclaimed at once rather than waiting out `stale`, because a Host that is stopped and restarted within that window would otherwise leave the plugin entry inactive and its routes unregistered.
 
 Startup registers management routes and runs Setup. After setup resolves, it installs Session and Executor hooks, ensures the main Session exists, starts Policy syncs, resumes interrupted Assignments, and starts passes and effects. `ready` marks completion of startup.
 
@@ -200,6 +200,8 @@ That context supplies deployment and commands, setup readiness (`ready`, `config
 
 `prepare(ticket, outcome)` supplies the Engine's `prepareTicket` hook: short name, directory and `ticketExecution` assignment text. `workerSessionId(ticket.id)` derives the Session id.
 
+`prepareDirectory` runs `executor.prepare` in the ticket's parent directory. When the deployment is `mode: local` and no prepare command is configured, it initializes the built-in local workspace instead (`src/executor/local-workspace.ts`): a repository on `agent/<name>` with an empty base commit on `main`, the placeholder identity `dsh-superagent <superagent@localhost>`, and no remote. A `github` deployment keeps the empty directory it always had.
+
 `WorkerSlots` reserves capacity before a launch or a delivery that wakes an idle worker. A human message can use one slot beyond `maxWorkers`, and wakes have priority over launches. `activeCount` supplies panel load.
 
 Transient provider and network failures get three retries. Launches use effect backoff; failed turns receive continuation messages after 15, 30 and 60 seconds. `inputMessage` renders each Input from current Ticket state, and `mandateInstructions` adds the matched-rule limits for inferred work.
@@ -291,6 +293,18 @@ Some generic modules still refer directly to GitHub or Feishu:
 | Path | Responsibility |
 | --- | --- |
 | `src/index.ts` | The main plugin entry: reads the machine settings, starts the Runtime, and gives it the restart that a save of a Source's account uses |
+| `src/app/config-file.ts` | Reads the declarative settings file the machine configuration names — JSON, or YAML through `config-yaml.ts`, chosen by extension — and overlays its blocks on the stored settings at startup, so Sources, Policy, Execution and Prompts can live in version control; `$prune` is read from the same raw object in either format, a schema failure names the line the YAML key sat on, and a malformed file is logged and ignored. It also resolves a same-stem `.yaml`/`.yml` sibling when the configured path is absent |
+| `src/app/config-yaml.ts` | The restricted YAML reader behind that loader: block mappings and sequences, flow collections, quoted and plain scalars, comments and literal or folded blocks, plus a `path → line` map. Anything outside the subset — tabs for indentation, anchors, aliases, merge keys, tags, multiple documents, complex keys — is refused with its line rather than guessed |
+| `src/app/config-watch.ts` | Watches the declarative settings file's directory (so an editor's write-temp-then-rename save does not kill the watcher) and filters on every name the loader accepts for the configured stem, so saving a `.yaml` sibling reloads too; debounces the burst one save emits into a single callback, which the runtime uses to re-apply the file without a restart |
+| `src/app/config-schema.ts` | The JSON Schema an editor reads for that same declarative file, generated from `SettingsSchema` rather than written by hand: every block optional (a partial file is a safe overlay), unknown top-level keys rejected (a typo fails at the editor instead of silently keeping the stored block), and `$prune` added by hand because the loader reads it before validation |
+| `src/app/config-write.ts` | Writes a panel save back into this instance's own declarative file before the store commits: only the leaf keys the save changed are patched, YAML edits are line-level so comments and untouched keys stay, a changed list is replaced as one value, an external edit (newer mtime or different text) is refused as a conflict, the patched document is re-parsed and validated before it replaces the file through tmp + rename, and `DeclarativeConflict`/`DeclarativeWriteError` reach the panel as 409/500 |
+| `src/app/instance-roots.ts` | Where an instance's workspace registry and Session log live: `instanceRoots` keeps DSH's shared `storages` and `sessions` under the profile's default state directory and puts both under a custom one, and `dataHomeProblem` is the one-time warning the runtime logs when `SUPERAGENT_DATA_HOME` is absent or disagrees |
+| `src/app/instance-status.ts` | The per-instance status file another instance's viewer reads: the versioned `schema: 1` document of health, load, pause, Watchdog schedule and Ticket counts; its atomic replacement through a temporary file and rename with mode 0600 and validation before writing; and the mtime heartbeat used when the content did not change |
+| `src/app/instances-view.ts` | The read-only aggregator and its CLI (`lib/instances-view.js`, `--instances-status` / `--json`): one report per record in the instance registry (`config/instances.json`), derived from each state directory's status file, lock directory and pid, with a read-only HTTP fallback for instances older than the status file. It never writes, opens the database, takes the lock or starts anything |
+| `src/app/state-lock.ts` | The state directory's one-backend lock: `acquireStateLock` takes the lock and records its holder pid beside the status file, and a lock left by a holder that no longer runs is removed and taken again; a live holder's lock still refuses acquisition |
+| `src/app/watchdog.ts` | The external control loop of the official design (§6): builds the scheduled digest of Tickets, load and unhealthy parts, and drives a separate Session that observes and intervenes but never takes work |
+| `src/app/state-store.ts` | The durable key/value seam (docs/017 P4, article §5): the interface a future remote store would implement, and an adapter that delegates to the local store with an optional namespace prefix |
+| `src/app/shards.ts` | Router sharding placement (article §2.1): FNV-1a Thread placement, Session ids per shard, and the load spread; wiring and the opt-in flag are separate |
 | `src/deployment.ts` | The plugin `Config` and `Machine`; `resolveDeployment` and `resolveFeishuBot` read the repository and the accounts from the Source settings, each CLI run as Executor shells run it; `SETUP_FIELDS` lists the Source fields setup reads. The code names no person, account or organization |
 | `src/setup.ts` | Setup problems: `SetupError`, with a code, the place that fixes it and the English text the log, the main Session and the panel share |
 | `src/policy.ts` | The Policy: the settings schemas by block, the Policy version, the gate and Mandate revalidation |
@@ -327,6 +341,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `src/app/settings.ts` | Settings |
 | `src/app/settings-history.ts` | `policyHistory`: each saved settings revision with what it changed from the one before |
 | `src/app/prompts.ts` | Prompts, `builtInParts`, the built-in parts a team may override, and `promptParts`, the order of a role's prompt sections |
+| `src/app/prompt-presets.ts` | The style presets of the three team sections: a style file per section with the shared discipline re-attached, so choosing a style cannot drop a rule, and `presetId`, which stops calling a text a preset once it was edited |
 | `src/app/context.ts` | The built-in prompt text, read from `prompts/`, and the transcript entries Sessions read |
 | `src/app/skill-files.ts` | Packaged text: `promptFile`, which joins a file's one-sentence lines into paragraphs, and the bundled skills |
 | `src/app/sessions.ts` | Sessions |
@@ -353,6 +368,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `src/app/views/overview.ts` | The overview: Tickets that need a person, problems, the last day's flow and the Executor's load |
 | `src/executor/dsh.ts` | The DshExecutor, `WorkerSlots`, `ticketExecution`, `inputMessage` and `mandateInstructions` |
 | `src/executor/background.ts` | A worker's background work in DeepSeek Harness, the shell jobs its Session owns (`ctx.jobs`) and its subagents (`ctx.subagents`): `runningJobs`, `untilQuiet`, `killJobs`, `collectJobs`, `stopSubagents`, `stopBackground`, `until`, and `cancelled`, the workers whose turn a stop of their subagents cancelled |
+| `src/executor/local-workspace.ts` | The built-in workspace of a `mode: local` Ticket with no `executor.prepare`: `usesLocalWorkspace` decides (local delivery and a blank command, so `github` is untouched), `localWorkspaceCommands` is the remote-free git sequence (init on `main`, the placeholder identity, an empty base commit, `agent/<name>`), and `initLocalWorkspace` runs it |
 | `src/infra/commands.ts` | `Commands`, the CLI transport: `run`; `api` and `pages`, limited to the configured repository and validated; `lark` as the bot; `git`. `CliError` carries the code a command's output reports, such as a GitHub HTTP status, and a command that prints nothing fails with how it ended, never with its arguments; `validItems` skips and counts the malformed items of a list |
 | `src/infra/environment.ts` | The agent's process environment: command shims, the git configuration and credential helper, `runAsWorker`, and the checks of the environment and of a Ticket's directory |
 | `src/infra/paths.ts` | The package's root, where packaged files are |
@@ -374,16 +390,20 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `src/sources/feishu-read.ts` | The `feishu/` reads of a Trigger's message, its root, parent and topic, and `feishuThreadContext`, which gives them to assessments with their images |
 | `src/sources/admission-context.ts` | The bounded window an assessment starts from: the first pages of a Trigger's Thread, read through its kind, and the messages around the Trigger |
 | `src/sources/feishu-image.ts` | Reads a Feishu message's image as an attachment for the assessing Session |
+| `src/sources/inbox.ts` | The Mode A inbox kind and plugin entry, exported as `./inbox-watch`: task files in a local directory become Triggers, the archive move is the cursor, and replies append to a file under `done/` |
 | `src/client/index.tsx` | The client plugin entry: the sidebar entry, the main panel and the page in DeepSeek Harness's Plugin Manager |
 | `src/client/app.tsx` | The panel: header, search, glossary, tabs and the page of the current route |
 | `src/client/provider.tsx` | What every page reads from its host: copy, calls, navigation, notices, the state poll, and `restart`, which reads the state quickly while dsh-superagent restarts |
 | `src/client/api.ts` | Calls and polls of the management API, typed by `src/app/api.ts`, and the Decision filters of the Eval status |
 | `src/client/route.ts` | The tabs, the settings groups, the typed routes that `parseRoute` reads, and the route memory with the settings group opened last |
 | `src/client/overview.tsx` | The overview |
+| `src/client/about.tsx` | The guide page: what this panel is, what each page does, the first steps, usage notes, and links to the upstream and build repositories |
 | `src/client/source.tsx`, `trigger.tsx`, `eval.tsx`, `execution.tsx` | One file per stage: its status, and its settings where it has some |
 | `src/client/thread.tsx`, `ticket.tsx` | The record pages: a Thread with its timeline, and a Ticket with its authorization, Inputs and Assignments |
 | `src/client/settings.tsx` | The Settings tab: the group navigation and the group on screen |
 | `src/client/settings-kit.tsx` | The building blocks of settings blocks: the settings the stage groups share, `useBlockDraft`, the fields, among them a Source kind's, and the history of saves |
+| `src/client/policy-editor.tsx` | One Source's Policy as a person reads it: who may hand work over, which messages open work by themselves and which are only recorded, beside the cell-by-cell admission table the same answers are written into |
+| `src/client/onboard.ts` | The first-run guide's memory: one browser key, read as "no guide" when storage is unavailable, and never written into the deployment's state |
 | `src/client/prompts.tsx` | The Prompts settings: the page owns the view it read and its editor the draft, and the Edit, Full prompt and History tabs render from them; a built-in part's editor shows a changed default and keeps or drops the override |
 | `src/client/prompt-config.ts` | The prompt configuration by section, by the team sections, skill names, built-in parts (`part/<key>`, with `withOverride`) and part headings the prompt views give, and the line diff of the full prompt, as pure functions |
 | `src/client/deployment.tsx` | The Deployment settings, also shown in DeepSeek Harness's Plugin Manager |
@@ -397,7 +417,16 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `src/client/locales.ts` | All copy in both languages, and the glossary of [001 Domain model](001-domain.md) |
 | `src/client/client.css`, `css.d.ts` | The panel's stylesheet, loaded as text |
 
-`src/sources/github.ts` and `src/sources/feishu.ts` are also the entries of the two Source plugins, built by `tsdown.config.ts` and exported in `package.json` as `./github-watch` and `./feishu-watch`. The bundle's `cordis.patch.yml` inserts the three plugins, with Feishu disabled.
+`src/sources/github.ts`, `src/sources/feishu.ts` and `src/sources/inbox.ts` are also the entries of the three Source plugins, built by `tsdown.config.ts` and exported in `package.json` as `./github-watch`, `./feishu-watch` and `./inbox-watch`. The bundle's `cordis.patch.yml` inserts the four plugins, with Feishu and the inbox disabled.
+
+| `src/chat-router/config.ts` | `chatRouter` settings schema, the three tool presets, `allowedChatTools()` and `briefOf()` |
+| `src/chat-router/tool-groups.ts` | The tool groups the panel offers for the custom preset, with no runtime dependency |
+| `src/chat-router/match.ts` | Which ordinary main chats the feature takes over, and a thread key per chat |
+| `src/chat-router/host.ts` | The Runtime → Sessions seam and the chief-of-staff system prompt |
+| `src/chat-router/tools.ts` | `chat_dispatch`, `chat_status` and `chat_answer` |
+| `src/chat-router/submit.ts` | A dispatched task as an inbox `.md` carrying the originating chat id |
+| `src/chat-router/channel.ts` | A bounded brief from an archived reply back to the chat that dispatched it |
+| `src/client/chat-router.tsx` | The panel settings group for the presets and dispatch switches |
 
 ## Tests
 
@@ -406,8 +435,10 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `tests/core-engine.spec.ts` | Domain rules on in-memory repositories: receiving, Eval, fan-out, resume and stop, interrupted Assignments, the pause, Policy changes, reports and outcomes, attaching, replies, failed deliveries and dismissed problems |
 | `tests/stage.spec.ts` | The Ticket stages, row by row |
 | `tests/policy.spec.ts` | Source scope, the gate, the admission table, Mandate revalidation, the Policy version, settings migrations and assessment outcomes |
+| `tests/admission-plain.spec.ts` | The plain-language layer over the admission table: the groups a cell falls into, the round trip of a choice, and which questions a scope can be asked at all |
 | `tests/registry.spec.ts` | `SourceRegistry`: instances, validation, Policy parts, Channels and Thread context |
 | `tests/sources.spec.ts` | The Feishu and GitHub Sources on a `SourceContext`: translation, polls and read positions, the pull request rules, health |
+| `tests/inbox.spec.ts` | The inbox Source on a `SourceContext`: file translation and stable ids, poll rounds with archiving, name collisions and retry, idempotent replies, scope, Policy defaults and the health entry |
 | `tests/commands.spec.ts` | CLI calls as the deployment's accounts, the Channels' answers, and repository-scoped GitHub calls |
 | `tests/feishu-read.spec.ts`, `tests/github-read.spec.ts` | Feishu and GitHub reads |
 | `tests/admission-context.spec.ts`, `tests/feishu-image.spec.ts` | The Thread window of assessments, and Feishu image reads |
@@ -418,12 +449,27 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `tests/passes.spec.ts` | Passes: one at a time, the ones asked for during a pass run as one after it, and the runtime health a failed pass reports |
 | `tests/outbox.spec.ts` | The Outbox on a running Runtime: messages wait while processing is paused or their Source is not installed |
 | `tests/cache.spec.ts` | `TextCache` |
+| `tests/config-yaml.spec.ts` | The restricted YAML reader: block mappings, sequences, flow collections, quoted scalars, comments and block scalars; positions for schema errors; and a positioned refusal for tabs, document markers, duplicate keys, anchors, aliases, merge keys and bad indentation |
+| `tests/config-file.spec.ts` | The declarative settings file: a partial overlay, record merge for Sources and Policy, a YAML file producing the same Settings as its JSON equivalent (with `$prune`), line numbers on a YAML parse or schema failure, resolution of a same-stem `.yaml` sibling, and text errors for a missing file, bad JSON or a schema failure |
+| `tests/config-watch.spec.ts` | The declarative file watcher: a save fires one callback, a neighbour file in the same directory does not, a same-stem `.yaml` sibling does, an atomic write-temp-then-rename save survives, a burst collapses into one call, and `close()` is idempotent and final |
+| `tests/config-write.spec.ts` | Panel write-back into the instance's own declarative file: a YAML change touching one key keeps its comment and the untouched keys, the loader applies the value after a restart, a hand edit (content or mtime) is refused as a conflict, an unwritable path reports a failure instead of a success, two instances write only their own files, JSON keeps its key order, and a `PUT settings/executor` through the API lands in the file |
+| `tests/local-workspace.spec.ts` | The built-in local workspace: chosen only for `local` delivery with a blank prepare command (the `github` default is untouched), a remote-free command sequence ending on `agent/<name>`, and a real git run proving the base commit, placeholder identity, empty remote list and a later signed-off worker commit |
+| `tests/config-schema.spec.ts` | The declarative file's JSON Schema: exactly the declared blocks plus `$prune`, nothing required and an unknown top-level key rejected, the committed file equal to a fresh generation (with a negative control proving that comparison can fail), and the shipped example surviving the same parse the loader applies |
+| `tests/source-instances.spec.ts` | A Source instance naming its kind: the id default, several instances of one kind selected by kind, and a kind that is not a valid id |
+| `tests/service-script-windows.spec.ts` | The Windows branch of `scripts/dsh-superagent`: its usage, the profile-scoped pidfile and control directory, exit 1 with no pids (also for a recorded pid that is gone), the intentional-stop marker, and a `--respect-stop` restart that leaves it alone |
+| `tests/watchdog.spec.ts` | The Watchdog digest: the state it states, the judgement it asks for, the management-API header, silence when healthy, and the pieces it derives from Health and a Ticket |
+| `tests/instance-roots.spec.ts` | The per-instance roots: the profile's default state directory resolving to DSH's shared `storages` and `sessions` unchanged, a custom state directory resolving under itself, and the warning for a missing or disagreeing `SUPERAGENT_DATA_HOME` |
+| `tests/instances-view.spec.ts` | The aggregator on five fixtures — alive, dead, a lock left behind, a corrupt status file and a future schema — each producing its own report, and an assertion that the whole aggregation performed no mutating `node:fs` call |
+| `tests/chain-of-recall.spec.ts` | Chain of recall: every card inlines the next hop's id and read path (Trigger → Thread → Ticket → Worker Session, Decision both ways), and the id a card names is the last segment of the path it gives |
+| `tests/state-store.spec.ts` | The state-store seam: delegation, namespace scoping and prefix filtering |
+| `tests/shards.spec.ts` | Sharding: Thread affinity, one Session id per shard, Threadless Triggers on the base Router, and a sample spread |
 | `tests/queue.spec.ts` | The Runtime's work through the effect queue, and what earlier versions stored |
 | `tests/followups.spec.ts` | A person's follow-up on a Ticket's Thread: its notice to the main Session, the tools that act on it, what a burst costs; a worker's hand-back and context follow, and the main Session's note |
 | `tests/health.spec.ts` | One health entry per part, each cleared by its own next success |
 | `tests/delivery.spec.ts` | `AgentDelivery` |
 | `tests/retry-health.spec.ts`, `tests/role-models.spec.ts` | Model budget retries, and the models of the two roles |
 | `tests/runtime.spec.ts` | The whole application on a simulated DeepSeek Harness host, through tools and HTTP |
+| `tests/chat-router.spec.ts` | Chat chief of staff: presets, session matching, dispatch files and bounded isolated briefs |
 | `tests/tools.spec.ts` | The Sessions' tools: what `orchestrator_read` reads for each role, and the shapes and checks of the other main Session tools |
 | `tests/runtime-concurrency.spec.ts` | Work that overlaps: Triggers during a pass, Tickets that change during deliveries and launches |
 | `tests/http.spec.ts` | The same-origin and loopback checks, the status of each kind of failure, the body limit, path parameters and queries |
@@ -433,17 +479,24 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `tests/migration.spec.ts` | The schema 11 migration: every stored record in its current shape, and the refusal of older schemas |
 | `tests/store.spec.ts` | Repositories and their working sets, in SQLite as in memory, the kv area, with every key of `KV` spelled only in `src/kv.ts` and the migration, settings history and queries |
 | `tests/prompts.spec.ts` | Prompt validation, assembly and versions |
+| `tests/prompt-presets.spec.ts` | The style presets: every preset keeps the load-bearing lines, is shorter than the built-in text, names exactly the style files on disk, and stops matching after one keystroke |
 | `tests/cards.spec.ts` | The rules the built-in text must state, file by file |
 | `tests/model-surface.spec.ts` | Everything models read: tools, prompts, skills and inputs, checked against the tool schemas, the execution environment and the glossary, within a size budget per role |
 | `tests/deployment.spec.ts`, `tests/environment.spec.ts`, `tests/index.spec.ts` | The plugin configuration and setup, the agent's process environment, the plugin entry |
+| `tests/windows-port.spec.ts` | The Windows port of the agent environment: batch shims and the marker they carry, the commands they block, and the agent account's `GH_CONFIG_DIR` |
 | `tests/service-script.spec.ts` | `scripts/dsh-superagent` against fake `ps`, `tmux` and `dsh` |
 | `tests/client.spec.tsx`, `tests/navigation.spec.ts`, `tests/controls.spec.tsx` | The client plugin's registration and polling, Session navigation and route memory, the local controls, and the panel's imports, which have no cycle |
 | `tests/panel-overview.spec.tsx`, `panel-source.spec.tsx`, `panel-trigger.spec.tsx`, `panel-eval.spec.tsx`, `panel-execution.spec.tsx` | Each page of the panel, against a fake management API answered by route |
 | `tests/panel-settings.spec.tsx`, `panel-prompts.spec.tsx`, `panel-deployment.spec.tsx`, `panel-panel.spec.tsx` | The settings groups, drafts and history, the prompts, the Deployment page, and the panel's search, glossary and route memory |
+| `tests/panel-about.spec.tsx` | The guide page: it names every page and the first steps, links both repositories, and the overview introduces the panel with a link to it |
 | `tests/draft.spec.ts`, `tests/prompt-config.spec.ts`, `tests/markdown.spec.ts`, `tests/marks.spec.ts` | Draft states, merges and the save bar's line; the prompt configuration by section and the line diff; the Markdown subset and its links; the mark of every state the views classify |
 | `tests/locales.spec.ts`, `tests/styles.spec.ts` | The copy in both languages, the stylesheet |
 | `tests/class-docs.spec.ts` | Every class in `src` has a JSDoc block before it |
 | `tests/docs.spec.ts` | Numbered documents link only to earlier ones, every local link resolves, no document has merge conflict markers, and this document's tables list every module and every test |
+| `tests/portability.spec.ts` | Portability: no tracked text file names the development machine (absolute path, user name or checkout name) |
+| `tests/release-invariants.spec.ts` | Release invariants: upstream attribution in README/NOTICE/LICENSE/locale/package metadata, the changelog, the package id and the absence of credential shapes |
+| `tests/client-module-id.spec.ts` | The built client module registers under the package name, which is what DSH's desktop host composes client modules by; a bare id fails to boot |
+| `tests/state-lock.spec.ts` | The state directory's one-backend lock: a lock left by a dead holder is reclaimed without waiting out `stale`, a live holder's lock still refuses acquisition, and the holder record is written and cleared with the lock |
 
 `tests/fixtures/` holds what several tests share: `host.ts`, a simulated DeepSeek Harness host; `panel-server.ts` and `panel.tsx`, the fake management API and the panel around a page; `deployment.ts`, a resolved deployment; `git.ts`, the environment of every git the tests start, which names no repository; and `async.ts`.
 
@@ -606,6 +659,8 @@ Most built-in instructions live in `prompts/*.md`, with one sentence per line jo
 Every plugin configuration key except `stateDir` is volatile. The panel's Deployment settings and DeepSeek Harness's Plugin Manager edit them through DeepSeek Harness's configuration form; the host writes `cordis.patch.yml` and updates the values in place, and dsh-superagent reads each limit when it uses it, so a change applies without a restart.
 
 A settings save that changes a Source field setup reads, such as an account's CLI, and any save while setup waits, restarts dsh-superagent. DeepSeek Harness's settings service does not serve the entry during that restart, so after its own restart dsh-superagent asks it to read the entry again, and an open form becomes editable again.
+
+The declarative settings file is watched too: the first apply installs a watcher on its directory (not on the file, because an editor saves by writing a temporary file and renaming it over the target), a save's burst of events collapses into one callback, and that callback re-applies the file. Saving an edit therefore needs no service restart; only a change to the set of Source instances still does, because a Source's polling loop is mounted with its plugin.
 
 ## Reviewing a change against real data
 

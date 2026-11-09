@@ -1,5 +1,18 @@
 node_modules/
-lib/
+# lib/ is committed: a git install of this bundle needs the built artifacts.
 .artifacts/
 .env
 coverage/
+
+# vitest JSON reporter output
+results.json
+
+# Plugin tarballs built by pnpm pack:plugin (artifacts, not sources).
+dist/
+
+# Governance (ReSerendipity/.github §7.1 / §13.1): local-only container and agent context.
+/local/
+AGENTS.md
+
+# Python bytecode from the CLI service launcher (artifacts, not sources; §9).
+__pycache__/

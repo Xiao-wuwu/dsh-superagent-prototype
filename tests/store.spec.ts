@@ -10,6 +10,9 @@ import { threadFacts } from '../src/app/views/records.ts'
 import { KV } from '../src/kv.ts'
 import { SettingsSchema } from '../src/policy.ts'
 
+// Windows has no POSIX mode bits to assert.
+const WINDOWS = process.platform === 'win32'
+
 
 let directory: string
 beforeEach(() => { directory = mkdtempSync(join(tmpdir(), 'orchestrator-store-')) })
@@ -246,7 +249,7 @@ it('lists in the same order in SQLite and in memory, and undoes a failed nested 
   store.close()
 })
 
-it('creates the state directory for its owner alone, and the database readable by its owner alone', () => {
+it.skipIf(WINDOWS)('creates the state directory for its owner alone, and the database readable by its owner alone', () => {
   const path = join(directory, 'state', 'orchestrator.sqlite')
   new Store(path).close()
   expect([statSync(dirname(path)).mode & 0o777, statSync(path).mode & 0o777]).toEqual([0o700, 0o600])

@@ -5,11 +5,16 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SENSITIVE_ENV_PATTERN, type SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
-import { GIT_LOCATION, agentVariables, credentialHelper, runAsWorker, verifyDirectory, withoutDirectory, workerBin, workerGitConfig, writeEnvironment }
+import { GIT_LOCATION, agentVariables, credentialHelper, runAsWorker, verifyDirectory, verifyEnvironment, withoutDirectory, workerBin, workerGitConfig, writeEnvironment }
   from '../src/infra/environment.ts'
 import { CliError } from '../src/infra/commands.ts'
-import { testDeployment } from './fixtures/deployment.ts'
+import { localDeployment } from '../src/deployment.ts'
+import { testDeployment, testMachine } from './fixtures/deployment.ts'
 import { gitEnv } from './fixtures/git.ts'
+
+// This file asserts the POSIX worker shims and POSIX git quoting; the Windows port replaces both
+// (batch shims, GH_CONFIG_DIR) and tests/windows-port.spec.ts covers that shape instead.
+const WINDOWS = process.platform === 'win32'
 
 // Git and shell subprocesses can exceed the 5s default timeout when the test suite runs in parallel.
 vi.setConfig({ testTimeout: 30_000 })
@@ -22,7 +27,7 @@ const workerEnv = (env: Record<string, string | undefined>): Record<string, stri
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'environment-')); mkdirSync(join(dir, 'real')) })
 afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
 
-describe('worker shims', () => {
+describe.skipIf(WINDOWS)('worker shims', () => {
   it('run a wrapper that calls `gh` by name without reaching the shim again, and keep the caller\'s other PATH entries', async () => {
     program(join(dir, 'real', 'gh'), 'echo "{\\"login\\":\\"agent-bot\\",\\"config\\":\\"$GH_CONFIG_DIR\\",\\"path\\":\\"$PATH\\"}"')
     const wrapper = program(join(dir, 'gh-agent'), `GH_CONFIG_DIR=${dir}/agent-config exec gh "$@"`)
@@ -71,7 +76,7 @@ describe('worker shims', () => {
   })
 })
 
-describe('agent git configuration', () => {
+describe.skipIf(WINDOWS)('agent git configuration', () => {
   it('ignores the operator\'s global and system git configuration, also after DSH drops credential-shaped variables', async () => {
     const home = join(dir, 'home'); mkdirSync(home)
     // Operator configuration that rewrites HTTPS to SSH, enables commit signing, and sets a credential helper.
@@ -111,7 +116,7 @@ it('fails instead of asking the operator\'s askpass helpers when the agent\'s cr
   expect(() => readFileSync(log, 'utf8')).toThrow()
 })
 
-it('removes every spelling of a directory from PATH and keeps the other entries', () => {
+it.skipIf(WINDOWS)('removes every spelling of a directory from PATH and keeps the other entries', () => {
   mkdirSync(join(dir, 'state', 'worker-bin'), { recursive: true })
   symlinkSync(join(dir, 'state'), join(dir, 'link'))
   const bin = join(dir, 'state', 'worker-bin')
@@ -130,7 +135,7 @@ const subprocess = (config: string): SubprocessRuntime => ({
     return { done, collected: { stdout: reader('stdout'), stderr: reader('stderr') } }
   },
 }) as unknown as SubprocessRuntime
-describe('ticket directory check', () => {
+describe.skipIf(WINDOWS)('ticket directory check', () => {
   const signal = new AbortController().signal
   const env = () => gitEnv({ GIT_CONFIG_GLOBAL: join(dir, 'global'), GIT_CONFIG_NOSYSTEM: '1' })
   const git = (...args: string[]) => exec('git', args, { cwd: dir, env: env() })
@@ -161,7 +166,7 @@ describe('ticket directory check', () => {
   })
 })
 
-describe('the repository the host\'s environment names', () => {
+describe.skipIf(WINDOWS)('the repository the host\'s environment names', () => {
   it('is left alone by the tests\' git and named in no worker\'s environment, as when they run inside `git rebase --exec`', async () => {
     // A scratch repository stands for the one under test, which `git rebase --exec` names in GIT_DIR and GIT_WORK_TREE.
     await exec('git', ['init', '-q', 'scratch'], { cwd: dir, env: gitEnv() })
@@ -182,5 +187,23 @@ describe('the repository the host\'s environment names', () => {
       for (const name of GIT_LOCATION) expect(env, name).not.toHaveProperty(name)
       expect(env.GIT_CEILING_DIRECTORIES).toBe(dir)
     } finally { vi.unstubAllEnvs() }
+  })
+})
+
+describe('local mode (no GitHub Source)', () => {
+  it('writes no gh shim and no github credential helper, and has nothing to verify', async () => {
+    const local = localDeployment(testMachine({ stateDir: dir }))
+    await writeEnvironment(local, [])
+    const names = readdirSync(workerBin(dir))
+    // The shim is `gh` on POSIX and `gh.cmd` on Windows; either would be a promise this mode cannot keep.
+    expect(names.filter(name => name === 'gh' || name === 'gh.cmd')).toEqual([])
+    const config = readFileSync(workerGitConfig(dir), 'utf8')
+    expect(config).toContain('useConfigOnly = true')
+    expect(config).not.toContain('credential "https://github.com"')
+    expect(config).not.toContain('insteadOf')
+    // Nothing ran, so the credential assertion must not be reached at all.
+    const run = vi.fn()
+    await expect(verifyEnvironment(local, { run } as unknown as SubprocessRuntime, new AbortController().signal)).resolves.toBeUndefined()
+    expect(run).not.toHaveBeenCalled()
   })
 })

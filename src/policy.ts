@@ -9,6 +9,7 @@ import { key, type AssessmentOutcome, type Mandate, type Policy, type PolicyEffe
   type Trigger, type ActorRef, type GateResult } from './core/index.ts'
 import { sameName } from './infra/text.ts'
 import { WORKER_COMMANDS } from './infra/environment.ts'
+import { ChatRouterSettingsSchema } from './chat-router/config.ts'
 
 export const RuleIdSchema = z.string().regex(/^[a-zA-Z0-9_-]{1,80}$/)
 export const RuleMatchSchema = z.object({ rule_id: RuleIdSchema, reason: z.string().trim().min(1).max(500) }).strict()
@@ -82,7 +83,9 @@ export const PolicyConfigSchema = z.object({
 }).strict()
 export const EvalConfigSchema = z.object({
   mode: z.enum(['off', 'observe', 'auto']).default('observe'),
-  timeoutSeconds: z.number().int().min(LIMITS.evalTimeoutSeconds.min).max(LIMITS.evalTimeoutSeconds.max).default(120),
+  // 120 was measured to be too tight: a multi-item write ticket's assessment exceeded it and the judgement
+  // landed as `unavailable / timeout`, which archives the task file with no reply at all.
+  timeoutSeconds: z.number().int().min(LIMITS.evalTimeoutSeconds.min).max(LIMITS.evalTimeoutSeconds.max).default(300),
   model: RoleModelSchema.nullable().default(null),
 }).strict()
 const CommandNameSchema = z.string().regex(/^[A-Za-z0-9._-]+$/).refine(name => name !== '.' && name !== '..', 'Not a command name')
@@ -94,17 +97,37 @@ export const ExecutorConfigSchema = z.object({
   directory: z.string().trim().refine(path => path === '' || path.startsWith('/'), 'An absolute path, or empty for <stateDir>/work').default(''),
   prepare: z.string().max(LIMITS.prepareCommand).default(''),
   blockedCommands: z.array(CommandNameSchema).default([]),
+  // The external control loop (article §6) and Router sharding (article §2.1) are runtime policy a person tunes here;
+  // the machine config keeps only startup wiring (state directory, declarative settings path).
+  watchdogMinutes: z.number().int().min(0).max(1440).default(30),
+  watchdogStallMinutes: z.number().int().min(1).max(1440).default(45),
+  watchdogGuidance: z.string().max(2000).default(''),
+  routerShards: z.number().int().min(1).max(8).default(1),
 }).strict()
-export const SourceInstanceSchema = z.object({ enabled: z.boolean().default(true), config: z.record(z.string(), z.unknown()).default({}) }).strict()
+/** Which kind a stored instance belongs to: its `kind` field, or its id when it does not name one. */
+export const sourceKindOf = (id: string, stored?: { kind?: string }): string => stored?.kind ?? id
+/**
+ * A configured Source. `kind` lets one kind have several instances (`organization-a`, `organization-b`);
+ * it defaults to the id, so a stored `github` entry keeps meaning kind `github`.
+ */
+export const SourceInstanceSchema = z.object({
+  kind: z.string().regex(/^[a-z][a-z0-9-]*$/).optional(),
+  enabled: z.boolean().default(true),
+  config: z.record(z.string(), z.unknown()).default({}),
+}).strict()
+/** The instance ids whose kind is one of `kinds`, in id order. */
+export const instancesOf = (settings: Settings, ...kinds: string[]): string[] =>
+  Object.entries(settings.sources).filter(([id, stored]) => kinds.includes(sourceKindOf(id, stored))).map(([id]) => id).sort()
 export const SettingsSchema = z.object({
   paused: z.boolean().default(false),
   sources: z.record(z.string().regex(/^[a-z][a-z0-9-]*$/), SourceInstanceSchema).default({}),
   policy: PolicyConfigSchema.default(() => PolicyConfigSchema.parse({})),
   eval: EvalConfigSchema.default(() => EvalConfigSchema.parse({})),
   executor: ExecutorConfigSchema.default(() => ExecutorConfigSchema.parse({})),
+  chatRouter: ChatRouterSettingsSchema.default(() => ChatRouterSettingsSchema.parse({})),
 }).strict()
 export type Settings = z.infer<typeof SettingsSchema>
-export type SettingsBlock = 'policy' | 'eval' | 'executor' | `source:${string}`
+export type SettingsBlock = 'policy' | 'eval' | 'executor' | 'chatRouter' | `source:${string}`
 export type SettingsSave = SettingsBlock | 'pause'
 export type SettingsOrigin = 'panel' | 'tool' | 'sync'
 

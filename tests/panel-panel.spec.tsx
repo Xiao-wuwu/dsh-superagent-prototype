@@ -3,7 +3,7 @@
 import { act } from 'react'
 import { expect, it } from 'vitest'
 import { en, zh } from '../src/client/locales.ts'
-import { usePanel, mount, remount, settle, all, click, type, text, field } from './fixtures/panel.tsx'
+import { usePanel, mount, remount, settle, all, find, tab, click, type, text, field } from './fixtures/panel.tsx'
 import { server, found } from './fixtures/panel-server.ts'
 
 usePanel()
@@ -45,7 +45,7 @@ it('returns to the exact page after a remount of the main panel', async () => {
 
 it('shows domain terms in the interface language only and lists both languages in the (?) glossary', async () => {
   await mount(en)
-  expect(all('[role="tab"]').map(tab => tab.textContent)).toEqual(['Overview', 'Source', 'Trigger', 'Eval', 'Execution', 'Settings'])
+  expect(all('[role="tab"]').map(tab => tab.textContent)).toEqual(['Guide', 'Overview', 'Source', 'Trigger', 'Eval', 'Execution', 'Settings'])
   await click('Glossary')
   const dialog = document.querySelector('[role="dialog"]')!
   const row = [...dialog.querySelectorAll('tr')].find(item => item.textContent?.startsWith('Ticket'))!
@@ -55,6 +55,20 @@ it('shows domain terms in the interface language only and lists both languages i
   expect([...dialog.querySelectorAll('th.dt-glossary-group')].map(cell => cell.textContent)).toEqual(['Roles', 'Source', 'Trigger', 'Eval',
     'Execution'])
   expect([...dialog.querySelectorAll('tr')].find(item => item.textContent?.startsWith('Main Session'))!.textContent).toContain('prompts call it the orchestrator')
+})
+
+it('keeps a labelled glossary entry beside the title on every page, and only one of it', async () => {
+  await mount()
+  const entry = () => find(zh.glossary, '.dt-head-title button')
+  // A name on the button, not a bare question mark: a newcomer has to be able to see what it is.
+  expect(entry().textContent).toBe(zh.glossary)
+  expect(all('.dt-head button').filter(button => button.getAttribute('aria-label') === zh.glossary)).toHaveLength(1)
+  for (const name of [zh['tab.source'], zh['tab.trigger'], zh['tab.eval'], zh['tab.execution'], zh['tab.settings']]) {
+    await click(tab(name))
+    expect(entry().textContent).toBe(zh.glossary)
+  }
+  await click(entry())
+  expect(document.querySelector('[role="dialog"]')).toBeTruthy()
 })
 
 it('says dsh-superagent is not answering when its routes are gone, as while it restarts', async () => {

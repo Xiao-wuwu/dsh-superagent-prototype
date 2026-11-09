@@ -8,8 +8,13 @@ import { sourceSkills } from './context.ts'
 import type { ModelCatalog } from '@deepseek-ai/dsh-api-session-controller/types'
 import { PromptConflict, SKILL_NAME, SKILL_PREFIX, TEAM_SECTIONS, builtInBase, builtInParts, defaultPrompts, savePrompts, type Prompts }
   from './prompts.ts'
+import { PROMPT_PRESETS } from './prompt-presets.ts'
 import { policyVersion } from '../policy.ts'
+import { inboxDir } from '../sources/inbox.ts'
+import { mkdirSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { SettingsConflict, type Settings } from './settings.ts'
+import { DeclarativeConflict, DeclarativeWriteError } from './config-write.ts'
 import { SetupError, type SetupProblem } from '../setup.ts'
 import { UserError, type EngineForPeople, type Ticket } from '../core/index.ts'
 import type { Deployment, Machine } from '../deployment.ts'
@@ -86,7 +91,8 @@ function failure(error: unknown): [number, Record<string, unknown>] {
   if (error instanceof SetupError) return [400, { error: error.message, setup: error.problem }]
   if (error instanceof RouteError) return [error.status, { error: error.message }]
   if (error instanceof UserError) return [error.missing ? 404 : 400, { error: error.message, code: error.code, values: error.values }]
-  if (error instanceof SettingsConflict || error instanceof PromptConflict) return [409, { error: error.message }]
+  if (error instanceof SettingsConflict || error instanceof PromptConflict || error instanceof DeclarativeConflict) return [409, { error: error.message }]
+  if (error instanceof DeclarativeWriteError) return [500, { error: error.message }]
   return [500, { error: error instanceof Error ? error.message : String(error) }]
 }
 
@@ -126,7 +132,8 @@ function promptsView(runtime: HttpHost, revision: number | undefined, offset: nu
   // built-in text changed since, the text they were edited from when known.
   const parts = Object.entries(builtInParts()).map(([key, part]) => ({ key, ...part, base: builtInBase(part.text) }))
   return { masterId: runtime.masterId, current: shown, defaults: defaultPrompts(), sections: TEAM_SECTIONS, skillName: SKILL_NAME.source,
-    builtin: Object.keys(sourceSkills), skillPrefix: SKILL_PREFIX, parts, defaultChanged: runtime.prompts.defaultChanged(shown.config),
+    builtin: Object.keys(sourceSkills), skillPrefix: SKILL_PREFIX, parts, presets: PROMPT_PRESETS,
+    defaultChanged: runtime.prompts.defaultChanged(shown.config),
     ...runtime.sessions.status(), ...runtime.prompts.history(offset) }
 }
 export type PromptsView = ReturnType<typeof promptsView>
@@ -145,7 +152,7 @@ const DecisionsQuery = z.object({ kind: z.string().default(''), window: z.litera
 const count = z.coerce.number().int().nonnegative()
 const PromptsQuery = z.object({ revision: count.optional(), offset: count.default(0) })
 const SourceBlock = z.templateLiteral(['source:', z.string().regex(/^[a-z][a-z0-9-]*$/)])
-const SettingsBlockSchema = z.union([z.enum(['policy', 'eval', 'executor']), SourceBlock])
+const SettingsBlockSchema = z.union([z.enum(['policy', 'eval', 'executor', 'chatRouter']), SourceBlock])
 const SaveRequest = z.object({ value: z.unknown(), revision: z.number().int().nonnegative() })
 
 function routes(runtime: HttpHost): Routes {
@@ -192,6 +199,30 @@ function routes(runtime: HttpHost): Routes {
     'GET tickets/:id': ({ params }) => ticketPage(runtime, params.id),
     'POST tickets/:id/retry': ({ params }) => { const id = ticket(params.id); runtime.engine.retryTicket(id); return { retried: true } },
     'POST tickets/:id/stop': ({ params }) => { const id = ticket(params.id); runtime.engine.stopTicket(id); return { stopped: true } },
+    // A panel-originated request becomes an ordinary inbox file, so it travels the same path as a dropped one:
+    // the Source's next poll turns it into a Trigger, and the reply lands in done/ like any other Mode A ticket.
+    'POST tickets': async ({ body }) => {
+      const request = z.object({ title: z.string().trim().min(1).max(200), body: z.string().max(20_000).optional() }).parse(await body())
+      // The inbox Source is usually enabled by the profile's bundle entry rather than by a stored settings block, so
+      // ask the registry for installed instances instead of reading `settings.sources`.
+      const inbox = runtime.sources.instances().find(instance => (instance.kind ?? instance.id) === 'inbox' && instance.enabled)
+      if (!inbox) {
+        throw new RouteError(400, 'This deployment has no enabled local inbox Source. Turn it on under Settings → Source, or ask on GitHub instead.')
+      }
+      const config = (inbox.config ?? {}) as { inboxDir?: string; actor?: string; pollSeconds?: number }
+      const root = inboxDir({ stateDir: runtime.machine.stateDir }, { inboxDir: config.inboxDir ?? '', actor: config.actor ?? 'local', pollSeconds: config.pollSeconds ?? 10 })
+      mkdirSync(root, { recursive: true })
+      const now = new Date()
+      const stamp = now.toISOString().replace(/[:.]/g, '-')
+      const slug = request.title.toLowerCase().replace(/[^a-z0-9一-鿿]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'ticket'
+      const file = `${slug}-${stamp}.md`
+      writeFileSync(join(root, file), `<!-- created from the panel at ${now.toISOString()} -->
+# ${request.title}
+
+${request.body ?? ''}
+`)
+      return { file, inbox: root }
+    },
     'POST executor/pause': async ({ body }) => runtime.settings.pause(z.object({ paused: z.boolean() }).parse(await body()).paused, 'panel'),
     'PUT settings/:block': async ({ params, body }) => {
       const block = SettingsBlockSchema.parse(params.block)
@@ -234,7 +265,7 @@ export function registerHttp(ctx: Context, runtime: HttpHost): () => void {
     ctx.webServer.register({ kind: 'prefix', path: '/orchestrator', handler: async (req, res) => {
       const url = new URL(req.url ?? '/', 'http://localhost')
       if (!url.pathname.startsWith('/orchestrator/api/')) { res.writeHead(404); res.end(); return }
-      if (!sameOrigin(req, ctx.webServer.port)) { json(res, 403, { error: 'Same-origin management request required' }); return }
+      if (!sameOrigin(req, ctx.webServer.port ?? 0)) { json(res, 403, { error: 'Same-origin management request required' }); return }
       try {
         await runtime.ready
         const route = match(table, req.method ?? 'GET', url.pathname.slice('/orchestrator/api/'.length).split('/'))

@@ -1,0 +1,50 @@
+dsh-superagent — Windows adaptation
+====================================
+
+This repository is an adaptation built on the official DeepSeek project:
+
+    dsh-superagent-prototype
+    https://github.com/deepseek-ai/dsh-superagent-prototype
+    Copyright (c) 2026 DeepSeek Harness Team
+    Licensed under the MIT License (see LICENSE)
+
+The upstream project is a research prototype, published with the disclaimer quoted in README.md:
+it is not an official DeepSeek product, and the design discussed in the article
+"Exploring Super-agent Design: Towards a More Autonomous Agent System" is partly future work.
+
+What this repository adds on top of upstream (all MIT, all opt-in or documented):
+
+  * a native Windows desktop application (Electron shell, portable layout, bundled git/gh/pwsh,
+    installer and shortcuts), under windows-app/ — removed from this repository on 2026-11-07;
+    the credit below is retained as provenance for the removed material
+  * multi-instance support: one context boundary per instance, separate state directories and
+    per-instance credentials (the desktop management window belonged to the removed shell)
+  * the external control loop ("Watchdog") deepened beyond upstream: cross-tick diffing, stall
+    detection, silence when nothing changed, and a standing instruction channel
+  * Router sharding (article §2.1), off by default: stable Thread placement, shard Sessions created
+    on first delivery, visible in health
+  * documentation for both the Windows port and the conformance review (docs/011–docs/015、017)
+
+Upstream files keep their copyright and MIT license. Where this adaptation changes upstream behaviour it
+is listed in docs/WINDOWS-DELTA.md; when upstream implements the same mechanism, this adaptation deletes its
+own version and returns to the upstream implementation.
+
+Provenance of the Windows work
+------------------------------
+
+This repository is maintained independently and is not a downstream of anyone else's fork. It builds on
+three separate sources, and the split is honest about which parts came from where:
+
+  * the official prototype above — the domain model, engine, sources, prompts and panel;
+  * Check-mj's Windows port (https://github.com/Check-mj/dsh-superagent-windows) — portions of the Windows
+    layer were first written there: `windows-app/` (the Electron shell, installer, bundled tools, instance
+    manager; removed from this repository on 2026-11-07) and docs/011–docs/015、017. That author's work is MIT, like this repository; it is credited here
+    and was the origin of that material, but this repository keeps an independent history and its own
+    direction, so it is not a fork of that project and no commit history was carried over into the public baseline;
+  * the external-agent-orchestration discipline — the operator-side rules injected into the team prompt
+    sections (secret redaction, "empty output means unproven", verifiable completion criteria, directory
+    boundaries, commit identity), plus Mode A (the local inbox Source) and the outer watchdog/guard layer,
+    both designed here.
+
+Maintainer of this adaptation: ReSerendipity (https://github.com/ReSerendipity)
+Prior Windows adaptation, and the origin of windows-app/ (removed 2026-11-07) and docs/011–docs/015、017: Check-mj (https://github.com/Check-mj)

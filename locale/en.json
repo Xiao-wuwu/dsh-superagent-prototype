@@ -1,6 +1,6 @@
 {
   "meta": {
-    "title": "Superagent",
-    "description": "Watch one GitHub repository, turn authorized requests into Tickets, and execute each in its own DSH Session."
+    "title": "DSH-Superagent",
+    "description": "DSH-Superagent is a plugin for DeepSeek Harness: it turns GitHub events (issues, pull requests, comments, CI), a local inbox directory, or an optional Feishu group chat into Tickets that run in context-isolated DSH Sessions and post their results back; the panel supervises triggers, evaluation, execution and settings. Install it straight into the official DeepSeek Harness app (no second program needed); a fully local mode works without GitHub. It is the Windows adaptation of the official dsh-superagent-prototype (not an official product) and implements the Watchdog control loop and Router sharding the article describes but upstream does not ship. Upstream: https://github.com/deepseek-ai/dsh-superagent-prototype (MIT, Copyright (c) 2026 DeepSeek Harness Team); this build: https://github.com/ReSerendipity/dsh-superagent"
   }
 }

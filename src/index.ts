@@ -2,13 +2,17 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-settings'
 import { Runtime } from './app/runtime.ts'
-import { Config, machineOf, type DeploymentConfig } from './deployment.ts'
+import { Config, defaultStateDir, machineOf, type DeploymentConfig } from './deployment.ts'
 
 export const name = 'dsh-superagent'
 export const inject = ['agents', 'sessionController', 'sessionPersistence', 'workspaceRegistry', 'permissionPresets', 'tools', 'systemPrompt', 'skills', 'webServer', 'llm', 'subprocess']
 export { Config }
 export async function apply(ctx: Context, config: DeploymentConfig): Promise<void> {
-  const machine = machineOf(config)
+  // An unconfigured state directory derives per profile (docs/006), so a fresh install runs without the patch step; an
+  // explicit `stateDir` still wins, so existing deployments keep their directory.
+  const stateDir = defaultStateDir((ctx.get('profileContext') as { name?: string } | undefined)?.name)
+  const machine = machineOf(config, stateDir)
+  if (config.stateDir === undefined) ctx.logger.info('dsh-superagent: no stateDir configured; using the per-profile default %s', machine.stateDir)
   // The management panel provides its own settings UI, so disable DSH's auto-generated settings page.
   ctx.inject(['settings'], child => { child.effect(() => child.settings.configure({ auto: false }, ctx.fiber)) })
   // Volatile limits update in place without a restart; account changes restart dsh-superagent. DSH's settings service stops

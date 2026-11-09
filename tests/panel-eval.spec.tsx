@@ -141,6 +141,9 @@ it('sets the Feishu admission table per receiving scope, offering only the cells
   await mount()
   await click(tab(zh['tab.settings']))
   await click(find(zh['term.eval'], '.dt-settings-link'))
+  // The cell-by-cell table is the advanced view: it is not on screen until asked for.
+  expect(all('.dt-admission')).toHaveLength(0)
+  await click(find(zh.admissionAdvanced))
   const rows = all('.dt-admission tbody tr').map(row => [row.querySelector('.dt-admission-scope')!.firstChild?.textContent,
     row.querySelectorAll('select').length])
   // Chats receiving every message have all three cells; @-only chats only the mention cell; other chats nothing while not received.
@@ -150,7 +153,10 @@ it('sets the Feishu admission table per receiving scope, offering only the cells
   await type(cell, 'explicit')
   // The warning is an icon in a slot every cell reserves, with the text on hover, so the table does not move.
   expect(document.querySelector('.dt-admission .dt-info-warn')?.getAttribute('aria-label')).toBe(zh.admissionAnyoneWarning)
-  expect(all('.dt-admission-slot')).toHaveLength(5)
+  expect(all('.dt-admission .dt-admission-slot')).toHaveLength(5)
+  // The plain form asks the same five questions the table can answer, and warns in the same place.
+  expect(all('.dt-part .dt-plain-item')).toHaveLength(5 + 1)
+  expect(all('.dt-plain-item .dt-info-warn')).toHaveLength(1)
   // A message not addressed to the bot cannot be an explicit request.
   expect([...field<HTMLSelectElement>('团队群 · 名单外 · 未 @').options].map(option => option.value)).toEqual(['inferred', 'ignore'])
   await click(zh.save)
@@ -167,8 +173,8 @@ it('lists each Source\'s bots next to its people and saves them, and sets the Gi
   expect([...github.querySelectorAll('[role="switch"]')].slice(1).map(item => item.getAttribute('aria-checked'))).toEqual(['false', 'false',
     'false', 'false'])
   await click(find(zh['term.eval'], '.dt-settings-link'))
-  const lists = () => all('.dt-part > .dt-field .dt-subhead .dt-field-head').map(head => head.firstChild?.textContent)
-  const list = (label: string) => all('.dt-part > .dt-field').find(item => item.textContent?.startsWith(label))!
+  const lists = () => all('.dt-part .dt-field .dt-subhead .dt-field-head').map(head => head.firstChild?.textContent)
+  const list = (label: string) => all('.dt-part .dt-field').find(item => item.textContent?.startsWith(label))!
   const add = async (label: string) => {
     await click([...list(label).querySelectorAll('button')].find(button => button.textContent === zh.addRow)!)
     return [...list(label).querySelectorAll('.dt-rows-item')].at(-1)!
@@ -181,6 +187,7 @@ it('lists each Source\'s bots next to its people and saves them, and sets the Gi
   expect(lists()).toEqual(['能发起工作的 GitHub 账号', '评论可以成为候选的机器人'])
   await type((await add('评论可以成为候选的机器人')).querySelector<HTMLInputElement>('input[aria-label="账号"]')!, 'dependabot[bot]')
   // Until the GitHub Source receives the repository's Issues, pull requests, comments or CI, only messages that mention the agent arrive.
+  await click(find(zh.admissionAdvanced))
   const rows = () => all('.dt-admission tbody tr').map(row => [row.querySelector('.dt-admission-scope')!.firstChild?.textContent,
     row.querySelector('.dt-admission-scope small')?.textContent, row.querySelectorAll('select').length])
   expect(rows()).toEqual([['新 Issue', '仅 @', 1], ['新 PR', '仅 @', 1], ['评论', '仅 @', 1], ['默认分支的 CI', '不接收', 0]])
@@ -205,10 +212,91 @@ it('shows the GitHub Source\'s switches for what it receives across the reposito
   expect(server.settings.sources.github!.config).toMatchObject({ observeIssues: true, observeComments: true, observeCi: true })
   await click(find(en['term.eval'], '.dt-settings-link'))
   await click(find(en['source.github'], '.dt-subtab'))
+  await click(find(en.admissionAdvanced))
   const rows = all('.dt-admission tbody tr').map(row => [row.querySelector('.dt-admission-scope')!.firstChild?.textContent,
     row.querySelectorAll('select').length])
   expect(rows).toEqual([['New Issues', 3], ['New pull requests', 1], ['Comments', 3], ['Default branch CI', 1]])
   // CI has no sender: its one cell is that of a message off the list that does not mention the agent.
   expect(field('Default branch CI · Not on the list · no mention')).toBeTruthy()
   expect(all('.dt-admission thead th').map(cell => cell.textContent)).toContain(en.admissionAddressed)
+})
+
+/** The plain-language groups answer each question with a segmented control; these read and press one by its label. */
+const control = (label: string) => {
+  const element = all('[role="tablist"]').find(item => item.getAttribute('aria-label') === label)
+  if (!element) throw new Error(`No control ${label}`)
+  return element
+}
+const choices = (label: string) => [...control(label).querySelectorAll<HTMLButtonElement>('[role="tab"]')]
+const picked = (label: string) => choices(label).find(button => button.getAttribute('aria-selected') === 'true')!.textContent!
+const pick = async (label: string, choice: string) => await click(choices(label).find(button => button.textContent === choice)!)
+const counts = () => all('.dt-part .dt-section-title .dt-count').map(count => count.textContent)
+const receiveAll = () => {
+  server.settings = { ...server.settings, sources: { ...server.settings.sources, feishu: { enabled: true, config: { cli: 'lark-bot',
+    chats: [{ chatId: 'oc_team', listen: 'all' }, { chatId: 'oc_other', listen: 'mentions' }], directMessages: true,
+      otherChats: 'none' } } } }
+}
+const openPolicy = async (dictionary = zh) => {
+  await click(tab(dictionary['tab.settings']))
+  await click(find(dictionary['term.eval'], '.dt-settings-link'))
+}
+
+it('asks the plain questions the matrix can answer, and writes the very cell the matrix reads back', async () => {
+  receiveAll()
+  await mount()
+  await openPolicy()
+  const outsider = `团队群 · ${zh['plainCell.outsiderAddressed']}`
+  const listed = `团队群 · ${zh['plainCell.listedNoMention']}`
+  // Five receivable cells, one fixed line, and the strongest default the pre-table behavior gave.
+  expect(all('.dt-plain-item')).toHaveLength(6)
+  expect(picked(outsider)).toBe(zh['plainChoice.drop'])
+  expect(picked(listed)).toBe(zh['plainChoice.record'])
+  expect(choices(outsider).map(button => button.textContent)).toEqual([zh['plainChoice.auto'], zh['plainChoice.record'], zh['plainChoice.drop']])
+  // A cell that cannot hold an explicit request is never offered one.
+  expect(choices(listed).map(button => button.textContent)).toEqual([zh['plainChoice.record'], zh['plainChoice.drop']])
+  // The default table leaves a listed sender's unaddressed message as a candidate and everything else unasked for.
+  expect(counts()).toEqual(['1', '0', '1'])
+  await pick(outsider, zh['plainChoice.auto'])
+  expect(picked(outsider)).toBe(zh['plainChoice.auto'])
+  expect(document.querySelector('.dt-plain-item .dt-info-warn')?.getAttribute('aria-label')).toBe(zh.admissionAnyoneWarning)
+  expect(counts()).toEqual(['1', '1', '1'])
+  await click(zh.save)
+  expect(server.settings.policy.sources.feishu!.admission).toEqual({ oc_team: { unlistedAddressed: 'explicit' } })
+  await click(find(zh.admissionAdvanced))
+  expect(field<HTMLSelectElement>('团队群 · 名单外 · 点名智能体').value).toBe('explicit')
+})
+
+it('moves the plain answers when the matrix writes the same cell, without asking a scope that receives nothing', async () => {
+  receiveAll()
+  await mount()
+  await openPolicy()
+  await click(find(zh.admissionAdvanced))
+  await type(field<HTMLSelectElement>('团队群 · 名单内 · 未 @'), 'ignore')
+  expect(picked(`团队群 · ${zh['plainCell.listedNoMention']}`)).toBe(zh['plainChoice.drop'])
+  expect(counts()).toEqual(['1', '0', '0'])
+  await type(field<HTMLSelectElement>('另一个群 · 名单外 · 点名智能体'), 'inferred')
+  expect(picked(`另一个群 · ${zh['plainCell.outsiderAddressed']}`)).toBe(zh['plainChoice.record'])
+  // 其他群 receives nothing while it is off, so the form never asks about it.
+  expect(all('.dt-plain-item').some(item => item.textContent?.includes('其他群'))).toBe(false)
+  await click(zh.save)
+  expect(server.settings.policy.sources.feishu!.admission).toEqual({ oc_team: { listedUnaddressed: 'ignore' },
+    oc_other: { unlistedAddressed: 'inferred' } })
+})
+
+it('names the roster it guards and the mode a recorded message follows, in English too', async () => {
+  await mount()
+  await openPolicy()
+  await click(find(zh['source.github'], '.dt-subtab'))
+  // Nothing in the repository is received beyond a mention, so only the mention cells are asked about.
+  expect(all('.dt-plain-item')).toHaveLength(4)
+  expect(all('.dt-plain-item').filter(item => item.textContent?.includes(zh['plainCell.outsiderNoMention']))).toHaveLength(0)
+  expect(text()).toContain('名单里的账号在 Issue 或评论里 @ 智能体的账号。')
+  expect(text()).toContain(zh.plainRecordMode.replace('{mode}', zh['mode.observe']))
+  // Without a bot on the list the sentence about bots is not shown at all.
+  expect(text()).not.toContain(zh.plainBots)
+  await remount(en)
+  await openPolicy(en)
+  expect(all('.dt-part .dt-section-name').map(section => section.textContent)).toEqual(
+    ['Who may hand work over', 'Which messages open work by themselves', 'Which messages are only recorded'])
+  expect(text()).toContain(en.plainRecordMode.replace('{mode}', en['mode.observe']))
 })

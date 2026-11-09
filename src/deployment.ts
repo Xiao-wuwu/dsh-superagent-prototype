@@ -1,29 +1,45 @@
 /** Plugin configuration and startup verification for repository access and agent CLI identities. */
 import { LIMITS } from './limits.ts'
 import { accessSync, constants, statSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { delimiter, isAbsolute, join } from 'node:path'
 import type { Volatile } from '@deepseek-ai/cordis'
 import s from '@deepseek-ai/schemastery'
 import { z } from 'zod'
 import type { SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
-import { runAsWorker, sameDirectory, withoutDirectory, workerBin } from './infra/environment.ts'
+import { agentGhConfig, runAsWorker, sameDirectory, withoutDirectory, workerBin } from './infra/environment.ts'
 import { SetupError } from './setup.ts'
 
 const reason = (error: unknown): string => error instanceof Error ? error.message : String(error)
-const absolute = (description: string) => s.string().pattern(/^\//).description(`${description} Absolute path.`)
+// Windows absolute paths are drive-qualified (`C:/...` or `C:\...`), so the POSIX `^/` rule alone would reject every valid
+// state directory on that platform.
+const absolute = (description: string) => s.string().pattern(/^(?:[A-Za-z]:[\\/]|\/)/).description(`${description} Absolute path.`)
 /** Plugin configuration of the dsh-superagent entry. Volatile fields apply without a restart because dsh-superagent reads them on each use; changing `stateDir` remounts the plugin. */
 export const Config = s.object({
-  stateDir: absolute('Directory for the database, locks, worker shims, the agent\'s git configuration and, by default, the ticket directories.').required(),
+  // Optional since 0.1.5: an unconfigured install derives one state directory per profile (defaultStateDir below), so a fresh
+  // install works without a patch step while a second profile still cannot contend for the first one's lock.
+  stateDir: absolute('Directory for the database, locks, worker shims, the agent\'s git configuration and, by default, the ticket directories. Omitted, the plugin uses `<DSH home>/state/<profile>-superagent` (`state/superagent` for a profile named `superagent`).'),
+  // Optional: a JSON or YAML file of declarative settings applied at startup, so a team can keep them in version control.
+  configPath: s.string().description('Path to a declarative settings file (JSON or YAML) applied at startup; omitted blocks keep the stored settings.'),
   promptMaxChars: s.number().min(LIMITS.promptMaxChars.min).max(LIMITS.promptMaxChars.max).step(1).default(100000)
     .description('Largest saved prompt configuration, in characters.').volatile(),
   admissionContextMaxPages: s.number().min(LIMITS.admissionContextMaxPages.min).max(LIMITS.admissionContextMaxPages.max).step(1).default(10)
     .description('Pages of thread context one assessment may read.').volatile(),
   admissionContextTimeoutMs: s.number().min(LIMITS.admissionContextTimeoutMs.min).max(LIMITS.admissionContextTimeoutMs.max).step(1)
     .default(15000).description('Time limit of one context read during an assessment, in milliseconds.').volatile(),
+  // Explicit, never inferred: whether a GitHub Source is installed cannot be told apart from a Source that has not
+  // registered yet, and guessing would either demand a repository a local-only operator does not have, or silently
+  // downgrade an installation that was meant to poll GitHub.
+  mode: s.union([s.const('github'), s.const('local')]).default('github')
+    .description('Where tickets come from: `github` (default) polls a repository; `local` runs with no GitHub Source at all, taking tickets from the inbox and delivering a commit on the ticket branch for a person to merge.'),
 })
 export type DeploymentConfig = ReturnType<typeof Config>
 export interface Machine {
   stateDir: string
+  /** `github` polls a repository; `local` runs without any GitHub Source. */
+  mode: 'github' | 'local'
+  /** Declarative settings file applied at startup, when the deployment names one. */
+  configPath?: string
   promptMaxChars: Volatile<number>
   admissionContextMaxPages: Volatile<number>
   admissionContextTimeoutMs: Volatile<number>
@@ -32,14 +48,25 @@ const MOVED: Record<string, string> = {
   repository: 'on the GitHub Source', branchPrefix: 'in the prepare command of the Execution settings', github: 'on the GitHub Source',
   feishu: 'on the Feishu Source', author: 'prompt text', repositoryPath: 'in the prepare command of the Execution settings',
   worktreeRoot: 'the ticket directory of the Execution settings', blockedCommands: 'in the Execution settings',
+  watchdogMinutes: 'in the Execution settings (control loop)', watchdogStallMinutes: 'in the Execution settings (control loop)',
+  watchdogGuidance: 'in the Execution settings (control loop)', routerShards: 'in the Execution settings (Router shards)',
 }
 
+/**
+* The state directory the plugin derives when the configuration names none: one per profile, so a second profile never
+* contends for the first one's lock. Mirrors `@deepseek-ai/dsh-home-paths` (`DSH_HOME`, else `~/.dsh`) without taking the
+* dependency for one path; a profile named `superagent` (and an unknown profile) keeps the historical `state/superagent`.
+*/
+export function defaultStateDir(profileName?: string): string {
+  const home = process.env.DSH_HOME || join(homedir(), '.dsh')
+  return join(home, 'state', !profileName || profileName === 'superagent' ? 'superagent' : `${profileName}-superagent`)
+}
 /** Read machine settings and reject unknown configuration keys (naming where deprecated keys moved). */
-export function machineOf(config: DeploymentConfig): Machine {
+export function machineOf(config: DeploymentConfig, stateDir = defaultStateDir()): Machine {
   const unknown = Object.keys(config).filter(key => !(key in (Config.dict ?? {})))
   if (unknown.length) throw new Error(`dsh-superagent configuration has keys it does not use: ${unknown.map(key => MOVED[key] ? `${key} (now ${MOVED[key]})` : key).join(', ')}; docs/006-deployment.md lists the keys`)
-  const { stateDir, promptMaxChars, admissionContextMaxPages, admissionContextTimeoutMs } = config
-  return { stateDir, promptMaxChars, admissionContextMaxPages, admissionContextTimeoutMs }
+  const { stateDir: configured, configPath, promptMaxChars, admissionContextMaxPages, admissionContextTimeoutMs, mode } = config
+  return { stateDir: configured ?? stateDir, mode, configPath, promptMaxChars, admissionContextMaxPages, admissionContextTimeoutMs }
 }
 
 export const GithubAccountsSchema = z.object({
@@ -55,6 +82,18 @@ export interface Deployment extends Machine {
   github: { cli: string; login: string; noreply: string }
   feishu?: FeishuBot
 }
+/**
+ * A deployment with no GitHub repository or account: the GitHub Source is not installed, so there is nothing to read
+ * notifications from, push to, or open a pull request on. Tickets come from the local inbox and the deliverable is a
+ * commit on the ticket branch, which the operator reviews and merges by hand. `noreply` still has to be set because
+ * workers commit with `user.useConfigOnly`, so a local placeholder stands in for the account's GitHub noreply address;
+ * it never reaches GitHub, since nothing is pushed.
+ */
+export const localDeployment = (machine: Machine): Deployment => ({
+  ...machine,
+  repository: '',
+  github: { cli: '', login: '', noreply: 'superagent@localhost' },
+})
 export interface FeishuBot { cli: string; appId: string; brand: 'feishu' | 'lark'; botId: string; name: string }
 
 /** Resolve a command name or absolute path to an executable file, ignoring the worker shim directory. */
@@ -72,7 +111,15 @@ export type Probe = (argv: string[]) => Promise<string>
 /** Run startup checks through DSH's worker subprocess service with worker shims removed from PATH so a `gh` wrapper script reaches the real binary. */
 export function workerProbe(subprocess: SubprocessRuntime, stateDir: string, cwd: string, signal: AbortSignal): Probe {
   const path = withoutDirectory(process.env.PATH ?? '', workerBin(stateDir))
-  return argv => runAsWorker(subprocess, ['env', `PATH=${path}`, ...argv], cwd, AbortSignal.any([signal, AbortSignal.timeout(60_000)]))
+  const timeout = (): AbortSignal => AbortSignal.any([signal, AbortSignal.timeout(60_000)])
+  if (process.platform !== 'win32') return argv => runAsWorker(subprocess, ['env', `PATH=${path}`, ...argv], cwd, timeout())
+  // Windows has no `env` executable; supply the shim-free PATH as an explicit environment layer, which DSH merges
+  // onto its sanitised ambient environment. Windows variable names are case-insensitive, so override the key that exists.
+  const pathVariable = Object.keys(process.env).find(name => name.toUpperCase() === 'PATH') ?? 'PATH'
+  // This probe runs before `applyEnvironment`, so the agent's configuration directory must be supplied here as well;
+  // otherwise the account check would read the operator's own `gh` login.
+  const environment = { [pathVariable]: path, GH_CONFIG_DIR: agentGhConfig(stateDir) }
+  return argv => runAsWorker(subprocess, argv, cwd, timeout(), environment)
 }
 
 const GithubUser = z.object({ login: z.string().regex(/^[A-Za-z0-9-]+$/), id: z.number().int().positive() })

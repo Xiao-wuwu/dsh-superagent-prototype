@@ -18,6 +18,7 @@ import { WorktreeNameSchema } from '../app/assessment.ts'
 import { resultRelay } from '../app/notices.ts'
 import type { HealthEntry } from '../infra/health.ts'
 import { cancelled, collectJob, killJobs, runningJobs, stopBackground, stopSubagents, until, untilQuiet } from './background.ts'
+import { initLocalWorkspace, usesLocalWorkspace } from './local-workspace.ts'
 
 const now = (): string => new Date().toISOString()
 /** Returns the worker session ID (`worker-<ticketId>`) for a ticket. */
@@ -67,7 +68,7 @@ export interface ExecutorHost {
   readonly effects: Pick<Effects, 'enqueue' | 'handle'>
   /** The `worker` health entry, which reports whether background worker event handling failed. */
   readonly health: HealthEntry
-  readonly machine: Pick<Machine, 'stateDir'>
+  readonly machine: Pick<Machine, 'stateDir' | 'mode'>
   readonly lifetime: AbortSignal
   /** Session manager for worker sessions and for relaying worker reports to the main Session. */
   readonly sessions: Pick<Sessions, 'ensure' | 'prompt' | 'promptedId' | 'relay' | 'holds'>
@@ -240,7 +241,9 @@ export class DshExecutor implements Executor {
   }
   /**
    * Runs the configured `executor.prepare` command for a new ticket workspace in its parent directory with the ticket's
-   * execution environment variables, then verifies the directory as the worker sees it.
+   * execution environment variables, then verifies the directory as the worker sees it. In `mode: local` with no prepare
+   * command, the built-in local workspace is initialized instead: a repository on `agent/<name>` under the placeholder
+   * identity, with no remote.
    * A failed prepare command throws `PrepareFailed`, which is not retried automatically; an empty directory it left is removed, a non-empty one kept.
    * @throws PrepareFailed with the command's output when the prepare command fails.
    */
@@ -251,12 +254,24 @@ export class DshExecutor implements Executor {
     const env = Object.fromEntries(this.host.environment(ticket).map(variable => [variable.key, variable.value]))
     // Enforce a timeout so a hung prepare command (such as on a credential prompt) fails the ticket instead of holding a worker slot indefinitely.
     const signal = AbortSignal.any([this.host.lifetime, AbortSignal.timeout(PREPARE_TIMEOUT_MS)])
-    if (command) await runAsWorker(this.host.context.subprocess, ['sh', '-c', command], dirname(directory), signal, env)
+    // A Windows deployment has no `sh`: the prepare command is a batch/command string, so run it through cmd.exe.
+    // Running it through a POSIX shell there also eats the backslashes of every Windows path in it.
+    const shell = process.platform === 'win32' ? ['cmd.exe', '/d', '/s', '/c'] : ['sh', '-c']
+    if (command) await runAsWorker(this.host.context.subprocess, [...shell, command], dirname(directory), signal, env)
       .catch(async (error: unknown) => {
         // Remove an empty directory left by a failed prepare command so a later retry does not treat it as already prepared.
         await rmdir(directory).catch(() => { /* Absent, or holding what the command wrote, which the output explains. */ })
         throw new PrepareFailed(`The prepare command failed: ${error instanceof Error ? error.message : String(error)}`)
       })
+    else if (usesLocalWorkspace(this.host.machine.mode, command)) {
+      await initLocalWorkspace(directory, ticket.execution?.name ?? '',
+        (argv, cwd) => runAsWorker(this.host.context.subprocess, argv, cwd, signal, env))
+        .catch(async (error: unknown) => {
+          // A repository this built could not create is not retried either: an existing directory counts as prepared.
+          await rmdir(directory).catch(() => { /* Not empty, so the output explains what git left behind. */ })
+          throw new PrepareFailed(`The local workspace could not be created: ${error instanceof Error ? error.message : String(error)}`)
+        })
+    }
     await mkdir(directory, { recursive: true })
     await verifyDirectory(directory, this.host.context.subprocess, this.host.lifetime)
   }

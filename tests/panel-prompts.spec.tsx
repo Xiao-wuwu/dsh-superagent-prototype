@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 // The Prompts settings.
 import { act } from 'react'
-import { builtInBase, builtInParts, defaultPrompts } from '../src/app/prompts.ts'
+import { TEAM_SECTIONS, builtInBase, builtInParts, defaultPrompts } from '../src/app/prompts.ts'
+import { PROMPT_PRESETS } from '../src/app/prompt-presets.ts'
 import { expect, it } from 'vitest'
 import { zh } from '../src/client/locales.ts'
 import { usePanel, mount, settle, all, tab, click, type, text, field, at } from './fixtures/panel.tsx'
@@ -235,4 +236,28 @@ it('loads a version from the history without its overrides of parts this version
   server.prompts.current = saved
   await click(zh.save)
   expect(server.prompts.current.config.overrides).toEqual({ 'runtime/dispatch': dispatch })
+})
+
+it('applies a style preset to all three team sections, keeps what else the team wrote, and stops being it after a keystroke', async () => {
+  const shared = builtInParts()['runtime/shared']!
+  server.prompts.revision = 1
+  server.prompts.current = promptVersion(1, { ...defaultPrompts(), skills: { notes: 'Team notes.' },
+    overrides: { 'runtime/shared': { text: 'Shared, the team way.', base: builtInBase(shared.text) } } })
+  at({ page: 'settings', query: { group: 'prompts' } })
+  await mount()
+  expect(all('.dt-preset-bar .dt-pill').map(pill => pill.textContent)).toEqual(PROMPT_PRESETS.map(item => item.label.zh))
+  expect(document.querySelector('.dt-preset-current')?.textContent).toBe(zh.promptStyleDefault)
+  const brief = PROMPT_PRESETS.find(item => item.id === 'brief')!
+  await click(brief.label.zh)
+  expect(document.querySelector('.dt-preset-current')?.textContent).toBe(`${zh.promptStylePreset} ${brief.label.zh}`)
+  expect(field<HTMLTextAreaElement>(zh.promptBody).value).toBe(brief.sections.communication)
+  await click(zh.save)
+  const config = server.prompts.current.config
+  expect(TEAM_SECTIONS.map(name => config[name])).toEqual(TEAM_SECTIONS.map(name => brief.sections[name]))
+  // A style change says nothing about skills or built-in overrides, so it moves neither.
+  expect(config.skills).toEqual({ notes: 'Team notes.' })
+  expect(Object.keys(config.overrides ?? {})).toEqual(['runtime/shared'])
+  expect(server.requests.filter(request => request.method === 'PUT').map(request => request.path)).toEqual(['prompts'])
+  await type(field<HTMLTextAreaElement>(zh.promptBody), `${brief.sections.communication} `)
+  expect(document.querySelector('.dt-preset-current')?.textContent).toBe(zh.promptStyleCustom)
 })

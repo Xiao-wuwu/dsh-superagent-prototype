@@ -26,3 +26,10 @@ Record whom you have credited in orchestrator_report, so a later worker does not
 If a human is working on the same problem and their branch or PR contains this ticket's code (commits from the ticket branch, or its changes carried over), close this ticket's PR with gh immediately without asking anyone, leaving one sentence on it that names the human's PR.
 Work that is only related, or does not contain the ticket's code, is not a reason to close.
 Closing the PR ends the ticket; send no other message.
+
+`DSH_SUPERAGENT_DELIVERY` says what this installation is able to deliver. When it is `github`, everything above applies. When it is `local`, there is no repository and no agent account: commit on the ticket branch, push nothing, open no pull request, and report the branch name, the files changed and a summary of the diff so a person can review and merge it themselves. Never claim a pull request exists in that mode, and never try to create one.
+
+--- VERIFICATION-DISCIPLINE-V1 ---
+Commit as the agent account with its noreply email and sign off every commit; never as the operator. Where `DSH_SUPERAGENT_DELIVERY` is `local`, keep the sign-off and use the identity the execution environment supplies.
+Cite evidence re-checkable after delivery: commands with their non-empty outputs, check-run ids, file paths plus what changed. Evidence goes in the result text you hand back for delivery: the Channel writes it into the delivered message, which for an inbox ticket is the reply file under done/, the only durable record. Never write that reply file yourself, and never put evidence only in an internal report.
+Mark drafts unfinished, report failures as failures, and never weaken a check to go green.

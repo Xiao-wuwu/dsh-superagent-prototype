@@ -2,15 +2,17 @@
 // The overview.
 import { expect, it } from 'vitest'
 import { en, zh } from '../src/client/locales.ts'
-import { usePanel, mount, remount, all, find, tab, click, text } from './fixtures/panel.tsx'
+import { usePanel, mount, remount, all, find, tab, click, text, field, type } from './fixtures/panel.tsx'
+import { verdictOf } from '../src/client/overview.tsx'
+import { ONBOARD_KEY } from '../src/client/onboard.ts'
 import { server, droppedReply, threadSummary } from './fixtures/panel-server.ts'
 
 usePanel()
 it('leads the overview with the pending Tickets, then problems, the last day and the Executor, each linking to its stage', async () => {
   await mount()
   expect(tab(zh['tab.overview']).getAttribute('aria-selected')).toBe('true')
-  expect(all('[role="tab"]').map(tab => tab.textContent)).toEqual(['概览', '来源', '触发', '评估', '执行', '设置'])
-  expect(all('.dt-section-title').map(title => title.textContent)).toEqual(['待处理工单2', '系统问题2', '过去 24 小时详情 ›', '执行器详情 ›'])
+  expect(all('[role="tab"]').map(tab => tab.textContent)).toEqual(['介绍', '概览', '来源', '触发', '评估', '执行', '设置'])
+  expect(all('.dt-section-title').map(title => title.textContent)).toEqual(['这个面板是什么', '派一张工单', '待处理工单2', '系统问题2', '过去 24 小时详情 ›', '执行器详情 ›', '关于这个构建'])
   expect(all('.dt-cards .dt-ticket-stage').map(item => item.textContent)).toEqual(['待回答', '待处理失败'])
   expect(all('.dt-cards .dt-att-what').map(item => item.textContent)).toEqual(['飞书 来源异常', '评估未完成：这个文案好奇怪'])
   // Actions sit below the title and Threads, apart from the stage, each with its icon.
@@ -125,8 +127,8 @@ it('words a refused retry in the interface language by its code', async () => {
 
 it('shows the overview in English', async () => {
   await mount(en)
-  expect(all('.dt-section-title').map(title => title.textContent)).toEqual([`${en.pendingTickets}2`, `${en.problems}2`,
-    `${en.lastDay}${en.details}`, `${en['term.executor']}${en.details}`])
+  expect(all('.dt-section-title').map(title => title.textContent)).toEqual([en.aboutWhatTitle, en.dispatchTitle, `${en.pendingTickets}2`, `${en.problems}2`,
+    `${en.lastDay}${en.details}`, `${en['term.executor']}${en.details}`, en.aboutTitle])
   expect(all('.dt-cards .dt-ticket-stage').map(item => item.textContent)).toEqual([en['stage.answer'], en['stage.failed']])
   expect(all('.dt-stat-label').map(label => label.textContent)).toEqual([en.flowReceivedLabel, en.flowFilteredLabel, en.flowJudgedLabel,
     en.flowAcceptedLabel, en.executingLabel, en.queuedLabel, en.idleLabel])
@@ -156,4 +158,78 @@ it('says when no Source is on, an Eval is past its deadline or a message keeps f
   await click(tab(zh['tab.overview']))
   await click('评估超时未决定：#9 迟迟未决')
   expect(server.requests.some(request => request.path.startsWith('threads/github:9'))).toBe(true)
+})
+
+it('folds setup problems and live component errors into the verdict the CLI encodes as exit codes', async () => {
+  await mount()
+  expect(text()).toContain('运行判读：部件报错')
+  expect(verdictOf(true, [])).toBe('setup')
+  expect(verdictOf(false, [{ kind: 'source-error' }])).toBe('broken')
+  expect(verdictOf(false, [{ kind: 'executor-paused' }])).toBe('paused')
+  expect(verdictOf(false, [{ kind: 'eval-unjudged' }])).toBe('ok')
+})
+
+it('dispatches a ticket from the panel by writing an inbox file, and says where it went', async () => {
+  await mount()
+  await type(field<HTMLInputElement>(zh.dispatchTitlePlaceholder), '把登录页主按钮改成蓝色')
+  await type(field<HTMLTextAreaElement>(zh.dispatchBodyPlaceholder), '只改颜色，不动布局')
+  await click(zh.dispatchSend)
+  expect(server.requests.some(request => request.method === 'POST' && request.path === 'tickets')).toBe(true)
+  expect(text()).toContain('已写入 面板工单.md')
+})
+
+it('shows the first-run card only until it is dismissed for good, and never as a dialog', async () => {
+  localStorage.removeItem(ONBOARD_KEY)
+  await mount()
+  expect(all('.dt-onboard')).toHaveLength(1)
+  // A card, not a modal: the page below stays reachable and the real controls are still there.
+  expect(all('[role="dialog"]')).toHaveLength(0)
+  expect(field<HTMLInputElement>(zh.dispatchTitlePlaceholder)).toBeTruthy()
+  expect(all('.dt-onboard-step').map(step => step.querySelector('b')?.textContent)).toEqual(['接上一个来源', '派一张工单', '看回信'])
+  // Nothing in the fake deployment reports a receiving Source, so step one must not claim one.
+  expect(text()).toContain(zh.onboardStep1Off)
+  await click(zh.onboardStep2Action)
+  expect(document.activeElement).toBe(field<HTMLInputElement>(zh.dispatchTitlePlaceholder))
+  await click(zh.onboardLater)
+  expect(all('.dt-onboard')).toHaveLength(0)
+  // Later is not a dismissal: nothing is remembered, and the card returns next time the panel opens.
+  expect(localStorage.getItem(ONBOARD_KEY)).toBeNull()
+  await remount()
+  expect(all('.dt-onboard')).toHaveLength(1)
+  await click(zh.onboardDismiss)
+  expect(localStorage.getItem(ONBOARD_KEY)).toBe('seen')
+  await remount()
+  expect(all('.dt-onboard')).toHaveLength(0)
+  // The mark is per installation, not per language: switching tongues does not bring the card back.
+  await remount(en)
+  expect(all('.dt-onboard')).toHaveLength(0)
+})
+
+it('says a Source is connected only when its own health reports ready', async () => {
+  localStorage.removeItem(ONBOARD_KEY)
+  server.health = { github: { state: 'error', detail: '3 consecutive failed polls' } }
+  await mount()
+  expect(text()).toContain(zh.onboardStep1Off)
+  server.health = { github: { state: 'ready', detail: '0 notifications' } }
+  await remount()
+  expect(text()).toContain(zh.onboardStep1On)
+  expect(text()).not.toContain(zh.onboardStep1Off)
+  await click(find(zh.onboardStep1Action))
+  expect(document.querySelector('.dt-settings-link[aria-current="page"]')?.textContent).toBe(zh['settingsGroup.source'])
+})
+
+it('shows no first-run card when the browser refuses storage, and the page still works', async () => {
+  const original = Object.getOwnPropertyDescriptor(window, 'localStorage')!
+  let reads = 0
+  Object.defineProperty(window, 'localStorage', { configurable: true, get() { reads++; throw new DOMException('storage denied', 'SecurityError') } })
+  try {
+    await mount()
+    // The guide must have actually asked, or this test would pass by never running the code it guards.
+    expect(reads).toBeGreaterThan(0)
+    expect(all('.dt-onboard')).toHaveLength(0)
+    expect(field<HTMLInputElement>(zh.dispatchTitlePlaceholder)).toBeTruthy()
+    expect(text()).toContain(zh.verdictLabel)
+  } finally {
+    Object.defineProperty(window, 'localStorage', original)
+  }
 })

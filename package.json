@@ -1,10 +1,16 @@
 {
-  "name": "dsh-superagent",
-  "author": "DeepSeek Harness Team <team@dsh.dev>",
+  "name": "@reserendipity/dsh-superagent",
+  "author": {
+    "name": "ReSerendipity",
+    "url": "https://github.com/ReSerendipity"
+  },
   "license": "MIT",
-  "version": "0.1.0",
-  "private": true,
-  "description": "A proactive agent for one GitHub repository, as a DSH (DeepSeek Harness) bundle: it listens to GitHub and optionally Feishu, evaluates requests under a Policy, turns authorized ones into Tickets, and executes each in its own DSH Session.",
+  "version": "0.2.0",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "description": "（非官方产品）DSH-Superagent 是 DeepSeek Harness 的插件：把 GitHub 仓库（issue/PR/评论/CI）、本机收件目录或可选的飞书群聊事件，变成在上下文隔离的 DSH 会话里执行的工单，并把结果回贴原处；面板管触发、评估、执行与设置。可直接装进官方 DeepSeek Harness 应用（无需第二个程序），也支持完全不配 GitHub 的本地模式；作为官方 dsh-superagent-prototype 的 Windows 适配版（非官方产品），补齐了上游未实现的 Watchdog 控制回路与 Router 分片。上游：https://github.com/deepseek-ai/dsh-superagent-prototype（MIT，Copyright (c) 2026 DeepSeek Harness Team）；本构建：https://github.com/ReSerendipity/dsh-superagent",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
@@ -16,6 +22,7 @@
     "./client": "./lib/client.js",
     "./github-watch": "./lib/github-watch.js",
     "./feishu-watch": "./lib/feishu-watch.js",
+    "./inbox-watch": "./lib/inbox-watch.js",
     "./package.json": "./package.json",
     "./locale/*.json": "./locale/*.json"
   },
@@ -24,8 +31,11 @@
     "cordis.patch.yml",
     "locale/*.json",
     "README.md",
+    "NOTICE",
+    "examples",
     "prompts",
-    "skills"
+    "skills",
+    "schema"
   ],
   "dsh": {
     "bundle": {
@@ -48,41 +58,40 @@
     "build": "tsdown",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "check": "pnpm typecheck && pnpm test && pnpm build"
+    "check": "pnpm typecheck && pnpm test && pnpm build",
+    "release:check": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release-check.ps1",
+    "pack:plugin": "node scripts/pack-plugin.mjs",
+    "prepack": "pnpm build"
   },
   "engines": {
     "node": "^22.19.0 || >=24.0.0",
-    "dsh": "^0.2.1-alpha.2"
+    "dsh": ">=0.2.1-alpha.2 <0.3.0"
   },
   "packageManager": "pnpm@11.7.0",
-  "dependencies": {
-    "proper-lockfile": "4.1.2",
-    "zod": "4.4.3"
-  },
   "peerDependencies": {
     "@deepseek-ai/cordis": "4.0.5-alpha.1",
-    "@deepseek-ai/dsh-agent": "^0.2.1-alpha.2",
-    "@deepseek-ai/dsh-api-session-controller": "^0.2.1-alpha.2",
-    "@deepseek-ai/dsh-client-locale": "^0.2.1-alpha.2",
-    "@deepseek-ai/dsh-client-ui-renderer": "^0.2.1-alpha.2",
-    "@deepseek-ai/dsh-client-ui-settings": "^0.2.1-alpha.2",
-    "@deepseek-ai/dsh-client-ui-layout": "^0.2.1-alpha.2",
-    "@deepseek-ai/dsh-client-ui-sidebar": "^0.2.1-alpha.2",
-    "@deepseek-ai/dsh-client-ui-workspace": "^0.2.1-alpha.2",
-    "@deepseek-ai/dsh-host-webserver": "^0.2.1-alpha.2",
-    "@deepseek-ai/dsh-llm": "^0.2.1-alpha.2",
-    "@deepseek-ai/dsh-permission-presets": "^0.2.1-alpha.2",
-    "@deepseek-ai/dsh-scope": "^0.2.1-alpha.2",
-    "@deepseek-ai/dsh-session": "^0.2.1-alpha.2",
-    "@deepseek-ai/dsh-session-persistence": "^0.2.1-alpha.2",
-    "@deepseek-ai/dsh-system-prompt": "^0.2.1-alpha.2",
-    "@deepseek-ai/dsh-tools": "^0.2.1-alpha.2",
-    "@deepseek-ai/dsh-workspace": "^0.2.1-alpha.2",
+    "@deepseek-ai/dsh-agent": ">=0.2.1-alpha.2 <0.3.0",
+    "@deepseek-ai/dsh-api-session-controller": ">=0.2.1-alpha.2 <0.3.0",
+    "@deepseek-ai/dsh-client-locale": ">=0.2.1-alpha.2 <0.3.0",
+    "@deepseek-ai/dsh-client-ui-renderer": ">=0.2.1-alpha.2 <0.3.0",
+    "@deepseek-ai/dsh-client-ui-settings": ">=0.2.1-alpha.2 <0.3.0",
+    "@deepseek-ai/dsh-client-ui-layout": ">=0.2.1-alpha.2 <0.3.0",
+    "@deepseek-ai/dsh-client-ui-sidebar": ">=0.2.1-alpha.2 <0.3.0",
+    "@deepseek-ai/dsh-client-ui-workspace": ">=0.2.1-alpha.2 <0.3.0",
+    "@deepseek-ai/dsh-host-webserver": ">=0.2.1-alpha.2 <0.3.0",
+    "@deepseek-ai/dsh-llm": ">=0.2.1-alpha.2 <0.3.0",
+    "@deepseek-ai/dsh-permission-presets": ">=0.2.1-alpha.2 <0.3.0",
+    "@deepseek-ai/dsh-scope": ">=0.2.1-alpha.2 <0.3.0",
+    "@deepseek-ai/dsh-session": ">=0.2.1-alpha.2 <0.3.0",
+    "@deepseek-ai/dsh-session-persistence": ">=0.2.1-alpha.2 <0.3.0",
+    "@deepseek-ai/dsh-system-prompt": ">=0.2.1-alpha.2 <0.3.0",
+    "@deepseek-ai/dsh-tools": ">=0.2.1-alpha.2 <0.3.0",
+    "@deepseek-ai/dsh-workspace": ">=0.2.1-alpha.2 <0.3.0",
     "@deepseek-ai/schemastery": "3.18.5-alpha.1",
-    "@deepseek-ai/dsh-skill": "^0.2.1-alpha.2",
-    "@deepseek-ai/dsh-attachment": "^0.2.1-alpha.2",
-    "@deepseek-ai/dsh-client-ui-slots": "^0.2.1-alpha.2",
-    "@deepseek-ai/dsh-subprocess": "^0.2.1-alpha.2"
+    "@deepseek-ai/dsh-skill": ">=0.2.1-alpha.2 <0.3.0",
+    "@deepseek-ai/dsh-attachment": ">=0.2.1-alpha.2 <0.3.0",
+    "@deepseek-ai/dsh-client-ui-slots": ">=0.2.1-alpha.2 <0.3.0",
+    "@deepseek-ai/dsh-subprocess": ">=0.2.1-alpha.2 <0.3.0"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.5-alpha.1",
@@ -120,6 +129,33 @@
     "@deepseek-ai/dsh-client-ui-slots": "0.2.1-alpha.2",
     "react-dom": "18.3.1",
     "@types/react-dom": "18.3.7",
-    "@deepseek-ai/dsh-subprocess": "0.2.1-alpha.2"
-  }
+    "@deepseek-ai/dsh-subprocess": "0.2.1-alpha.2",
+    "proper-lockfile": "4.1.2",
+    "zod": "4.4.3"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ReSerendipity/dsh-superagent.git"
+  },
+  "homepage": "https://github.com/ReSerendipity/dsh-superagent",
+  "bugs": {
+    "url": "https://github.com/ReSerendipity/dsh-superagent/issues"
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "super-agent",
+    "github",
+    "windows"
+  ],
+  "contributors": [
+    {
+      "name": "DeepSeek Harness Team",
+      "url": "https://github.com/deepseek-ai/dsh-superagent-prototype"
+    },
+    {
+      "name": "Check-mj (prior Windows port)",
+      "url": "https://github.com/Check-mj"
+    }
+  ]
 }

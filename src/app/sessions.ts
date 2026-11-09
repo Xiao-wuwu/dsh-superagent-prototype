@@ -19,6 +19,9 @@ import { SKILL_PREFIX, type PromptVersion, type Prompts } from './prompts.ts'
 import type { Store } from './store.ts'
 import { KV } from '../kv.ts'
 import type { RegisterTool, Tool } from './tools/tool.ts'
+import { allowedChatTools, CHAT_TOOLS } from '../chat-router/config.ts'
+import { isChatRouterSession } from '../chat-router/match.ts'
+import type { ChatRouterHost } from '../chat-router/host.ts'
 
 /** Host dependencies used by `Sessions`. */
 export interface SessionsHost {
@@ -30,12 +33,16 @@ export interface SessionsHost {
   /** The `models` health entry, which reports managed sessions waiting on a model-budget retry. */
   readonly health: HealthEntry
   readonly masterId: string
+  /** The Router Sessions this instance runs: the master Session, plus one per shard when sharding is on. */
+  routerIds(): string[]
   readonly lifetime: AbortSignal
   closing(): boolean
   /** Execution environment variables for `ticket`, rendered into its worker's system prompt. */
   environment(ticket: Ticket): Variable[]
   /** Tools to register on the main Session (`ticket === undefined`) or on `ticket`'s worker Session. */
   tools(agent: Agent, ticket?: Ticket): Tool[]
+  /** Optional chief-of-staff feature: decorates newly created ordinary main chats with a restricted tool set. */
+  readonly chatRouter?: ChatRouterHost
 }
 
 /**
@@ -58,6 +65,8 @@ declare module '@deepseek-ai/cordis' {
  * changes the profile, schedules work or starts goals outside the worker slots, the pause and a person's hold, starts or
  * messages other Sessions, or edits documents.
  */
+/** What a main Session keeps: its own tools, the shell it actually has, and the job controls it must not spend time waiting on. */
+const MASTER_TOOLS = ['skill', 'bash', 'pwsh', 'read', 'read_image', 'job_output', 'job_list', 'job_kill']
 const WORK_TOOLS = ['read', 'write', 'edit', 'read_image', 'glob', 'grep', 'bash', 'pwsh', 'job_output', 'job_list', 'job_kill', 'web_search',
   'web_fetch', 'skill', 'todo_write', 'subagent', 'list_subagent_models', 'send_message', 'list_agents', 'interrupt_agent']
 /** What the main Session is told when it would wait: what it waits for comes to it, and a waiting step holds back the next. */
@@ -76,7 +85,8 @@ const SLEEP = /(?:^|[;&|({!`\n]|\b(?:do|then|else|elif|if|while|until|time|exec|
  */
 function noWait({ name, arguments: input }: { name: string; arguments: unknown }, routed: () => boolean): string | undefined {
   const args = (input ?? {}) as { command?: unknown; timeoutMs?: unknown; run_in_background?: unknown; wait?: unknown; timeout_ms?: unknown }
-  if (name === 'bash') {
+  // The shell tool is `bash` on POSIX and `pwsh` on Windows; both take the same arguments.
+  if (name === 'bash' || name === 'pwsh') {
     const sleeps = typeof args.command === 'string' && SLEEP.test(args.command)
     if (sleeps || typeof args.timeoutMs === 'number' && args.timeoutMs > 30_000) return NO_WAIT
     if (args.timeoutMs === undefined && args.run_in_background !== true && !routed()) return DEFAULT_WAIT
@@ -124,7 +134,7 @@ export class Sessions {
     ctx.inject(['agentPresets'], child => {
       child.on('agent-preset/selected', (sessionId, preset) => {
         const ticketId = ticketOfSession(sessionId), agent = ctx.agents.get(sessionId as SessionId)
-        const ours = sessionId === this.host.masterId ? ROUTER_PRESET : ticketId && this.host.store.tickets.get(ticketId) ? WORKER_PRESET : undefined
+        const ours = this.host.routerIds().includes(sessionId) ? ROUTER_PRESET : ticketId && this.host.store.tickets.get(ticketId) ? WORKER_PRESET : undefined
         if (!ours || preset === ours || !agent) return
         const presets = child.get('agentPresets') as { select(agent: Agent, preset: string): Promise<string> }
         presets.select(agent, ours).catch(() => {})
@@ -232,9 +242,17 @@ export class Sessions {
   private async decorate(agent: Agent): Promise<void> {
     if (this.bindings.has(agent)) return
     const host = this.host
-    const master = agent.id === host.masterId
+    // Any Router Session gets the Router treatment: the master, and each shard when sharding is on.
+    const master = host.routerIds().includes(agent.id)
     const ticket = master ? undefined : this.ticketOf(agent)
-    if (!master && !ticket) { this.limitSubagent(agent); return }
+    if (!master && !ticket) {
+      const chat = host.chatRouter
+      if (!chat || !isChatRouterSession(agent, { routerIds: host.routerIds(), settings: chat.settings() })) {
+        this.limitSubagent(agent); return
+      }
+      this.decorateChatRouter(agent, chat)
+      return
+    }
     const binding: SessionBinding = { disposers: [] }
     this.bindings.set(agent, binding)
     this.retryHealth.restore(agent.id, agent.session.snapshotEvents())
@@ -260,13 +278,43 @@ export class Sessions {
     const register = this.registerTool(agent, binding)
     for (const tool of host.tools(agent, ticket)) register(tool.name, tool.description, tool.schema, tool.execute)
     if (master) {
-      binding.disposers.push(agent.ctx.tools.restrict({ allow: ['skill', 'bash', 'read', 'read_image', 'job_output', 'job_list', 'job_kill'] }),
+      // `tools.restrict` refuses to name a tool the profile does not have, so take the tool list from what is really
+      // there: this keeps a POSIX profile on `bash`, a Windows one on `pwsh`, and a Windows profile that also loads a
+      // bash plugin on both, without guessing from the platform string.
+      const parentScope = scopeParentOf(agent)
+      const allow = MASTER_TOOLS.filter(name => agent.ctx.tools.get(name, parentScope))
+      binding.disposers.push(agent.ctx.tools.restrict({ allow }),
         agent.ctx.tools.guard(execution => noWait(execution, () => this.routed(agent))))
     } else {
       // An Executor Session keeps the profile's work tools it has, which DSH requires to be known; its own tools are not masked.
       binding.disposers.push(...this.workOnly(agent, ticket!.id))
     }
   }
+  /**
+   * An ordinary, newly created main chat becomes a chief of staff. It keeps only the locally registered dispatch tools
+   * plus optional inherited read-only tools; a guard refuses anything else with an instruction to dispatch. Registration
+   * order matters: `tools.restrict` cannot name local tools, so those are registered first and are never masked.
+   */
+  private decorateChatRouter(agent: Agent, chat: ChatRouterHost): void {
+    const settings = chat.settings()
+    const binding: SessionBinding = { disposers: [] }
+    this.bindings.set(agent, binding)
+    binding.disposers.push(agent.ctx.systemPrompt.section({
+      name: 'dsh-superagent-chat-router', order: 9999, interpolate: false, complete: true,
+      text: () => chat.prompt(),
+    }))
+    const register = this.registerTool(agent, binding)
+    for (const item of chat.tools(agent)) register(item.name, item.description, item.schema, item.execute)
+    const parentScope = scopeParentOf(agent)
+    const allow = allowedChatTools(settings).filter(name => agent.ctx.tools.get(name, parentScope))
+    binding.disposers.push(agent.ctx.tools.restrict({ allow }))
+    if (settings.forceDispatch) {
+      const permitted = new Set<string>([...CHAT_TOOLS, ...allow])
+      binding.disposers.push(agent.ctx.tools.guard(execution => permitted.has(execution.name)
+        ? undefined : 'You must dispatch this task with chat_dispatch; this conversation has no permission to do the work itself.'))
+    }
+  }
+
   /**
    * Whether a Session runs the router preset: as DSH's preset registry last selected it, read through the session projection
    * on a DSH whose registry has no `presetForSession`, else as it was created; `standard`, the safer caps, when unreadable.

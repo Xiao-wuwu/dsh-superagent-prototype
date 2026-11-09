@@ -7,6 +7,7 @@ import { EvalStatus } from './eval.tsx'
 import { ExecutionStatus } from './execution.tsx'
 import { ticketMark } from './marks.ts'
 import { GLOSSARY, GLOSSARY_VALUES, en, zh, type DshSuperagentKey } from './locales.ts'
+import { AboutPage } from './about.tsx'
 import { OverviewPage } from './overview.tsx'
 import { PanelProvider, usePanel, usePanelData } from './provider.tsx'
 import { HOME, TABS, initialLocation, lastSettingsGroup, remember, routeLabel, settingsRoute, type Location, type Route,
@@ -122,15 +123,17 @@ function Header({ masterId }: { masterId: string | undefined }) {
       failure => { if (request === latest.current) notify(errorText(failure)) })
   }
   return <header className="dt-head">
-    <div className="dt-head-title"><h1 className="dt-title">{t('title')}</h1></div>
+    {/* The glossary is the answer to "what does this word mean", so it sits beside the title with its name on it, on every page. */}
+    <div className="dt-head-title"><h1 className="dt-title">{t('title')}</h1>
+      <Button variant="ghost" size="sm" icon={<Icon name="question" size={14} />} aria-label={t('glossary')} title={t('glossary')}
+        aria-haspopup="dialog" onClick={() => setGlossary(true)}>{t('glossary')}</Button>
+    </div>
     <div className="dt-toolbar">
       <form ref={search} className="dt-search" role="search" onSubmit={submit} onKeyDown={event => { if (event.key === 'Escape') show() }}>
         <Input type="search" icon={<Icon name="search" />} value={query} placeholder={t('searchPlaceholder')} aria-label={t('searchLabel')}
           onChange={event => { setQuery(event.target.value); if (!event.target.value) show() }} />
         {result && <SearchResults result={result.value} query={result.query} onClose={() => { show() }} />}
       </form>
-      <Button variant="ghost" size="sm" icon={<Icon name="question" />} aria-label={t('glossary')} title={t('glossary')} aria-haspopup="dialog"
-        onClick={() => setGlossary(true)} />
       <Button variant="outline" size="sm" icon={<Icon name="session" size={14} />} disabled={!masterId}
         onClick={() => { if (masterId) openSession(masterId).catch(failure => notify(errorText(failure))) }}>{t('openMaster')}</Button>
     </div>
@@ -146,6 +149,7 @@ function Pages({ route, openTab, deploymentForm }: { route: Route; openTab: (tab
   const waiting = error ? <p className="dt-error" role="alert">{error.message}</p> : <p className="dt-hint">{t('loading')}</p>
   const page = (() => {
     switch (route.page) {
+      case 'about': return <AboutPage />
       case 'overview': return <OverviewPage />
       case 'source': return <SourceStatus />
       case 'trigger': return route.id !== undefined ? <ThreadPage key={route.id} id={route.id} target={route.query?.trigger} />

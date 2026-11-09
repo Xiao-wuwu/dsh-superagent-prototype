@@ -41,6 +41,13 @@ export async function mount(dictionary: Record<string, string> = zh) {
   await act(async () => { root!.render(<Panel t={translator(dictionary)} />) })
   await settle()
 }
+/** Mounts without leaving the default page, for asserting what the panel opens on. */
+export async function mountRaw(dictionary: Record<string, string> = zh) {
+  container = document.createElement('div'); document.body.append(container)
+  root = createRoot(container)
+  await act(async () => { root!.render(<Panel t={translator(dictionary)} />) })
+  await settle()
+}
 export async function remount(dictionary: Record<string, string> = zh) { unmount(); await mount(dictionary) }
 
 export const all = (selector: string) => [...document.querySelectorAll<HTMLElement>(selector)]

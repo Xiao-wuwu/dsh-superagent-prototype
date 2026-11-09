@@ -77,9 +77,13 @@ export function ExecutionSettings() {
   const { blocks, environment, sources } = useSettings().settings
   // Keep raw user text (such as separators between blocked commands) in the draft and parse only on save.
   const executor = blocks.executor.value
-  const saved = { ...executor, maxWorkers: String(executor.maxWorkers), blockedCommands: executor.blockedCommands.join(' ') }
+  const saved = { ...executor, maxWorkers: String(executor.maxWorkers), blockedCommands: executor.blockedCommands.join(' '),
+    watchdogMinutes: String(executor.watchdogMinutes), watchdogStallMinutes: String(executor.watchdogStallMinutes),
+    routerShards: String(executor.routerShards) }
   const draft = useBlockDraft('executor', saved, blocks.executor.revision,
-    value => ({ ...value, maxWorkers: numberOf(value.maxWorkers), blockedCommands: value.blockedCommands.split(/[\s,]+/).filter(Boolean) }))
+    value => ({ ...value, maxWorkers: numberOf(value.maxWorkers), blockedCommands: value.blockedCommands.split(/[\s,]+/).filter(Boolean),
+      watchdogMinutes: numberOf(value.watchdogMinutes), watchdogStallMinutes: numberOf(value.watchdogStallMinutes),
+      routerShards: numberOf(value.routerShards) }))
   const value = draft.value
   const edit = (next: Partial<typeof value>) => draft.edit({ ...value, ...next })
   const prepare = useRef<HTMLTextAreaElement>(null)
@@ -99,6 +103,25 @@ export function ExecutionSettings() {
           <Field label={t('maxWorkers')} hint={t('maxWorkersHint')}>
             <Input type="number" min={LIMITS.maxWorkers.min} max={LIMITS.maxWorkers.max} required value={value.maxWorkers}
               onChange={event => edit({ maxWorkers: event.target.value })} />
+          </Field>
+        </div>
+        <div className="dt-form dt-block">
+          <h2 className="dt-block-title">{t('controlLoop')}<InfoTip text={t('controlLoopIntro')} /></h2>
+          <Field label={t('watchdogMinutes')} hint={t('watchdogMinutesHint')}>
+            <Input type="number" min={0} max={1440} value={value.watchdogMinutes}
+              onChange={event => edit({ watchdogMinutes: event.target.value })} />
+          </Field>
+          <Field label={t('watchdogStallMinutes')} hint={t('watchdogStallMinutesHint')}>
+            <Input type="number" min={1} max={1440} value={value.watchdogStallMinutes}
+              onChange={event => edit({ watchdogStallMinutes: event.target.value })} />
+          </Field>
+          <Field label={t('watchdogGuidance')} hint={t('watchdogGuidanceHint')}>
+            <textarea className="dt-textarea" rows={3} maxLength={2000} spellCheck={false} value={value.watchdogGuidance}
+              onChange={event => edit({ watchdogGuidance: event.target.value })} />
+          </Field>
+          <Field label={t('routerShards')} hint={t('routerShardsHint')}>
+            <Input type="number" min={1} max={8} value={value.routerShards}
+              onChange={event => edit({ routerShards: event.target.value })} />
           </Field>
         </div>
         <div className="dt-form dt-block">

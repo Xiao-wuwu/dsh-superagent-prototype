@@ -1,0 +1,34 @@
+# 模板来源：ReSerendipity/.github 的 governance/templates/CODEOWNERS.template（§12.5 条款 2）
+# 纪律：既有分区清单保持原状，不简化、不覆盖；本仓此前没有 CODEOWNERS，这是首份。
+# 事实：单人仓下 require_code_owner_reviews 会让作者自批死锁（公开仓）或不可用（私有仓，ADR-0004），
+#       因此本文件的作用是「reviewer 指派 + 敏感路径登记 + 未来接线点」，不是合并门禁。
+
+# ============================================================
+# CODEOWNERS — DSH-Superagent 变更负责人
+# 当前仓库仅一名协作者，所有路径默认指派 @ReSerendipity。
+# 本文件在单人仓只影响 PR 的 reviewer 指派，不构成合并门禁。
+# 新增协作者或接入机器人时，在此按区收窄授权。
+# ============================================================
+
+* @ReSerendipity
+
+# 与上游逐字节相同的领域引擎：改动前必须先对 `.upstream-baseline` 做 diff（docs/WINDOWS-DELTA.md §5）
+src/core/** @ReSerendipity
+
+# 授权与准入语义：一处改动会影响进行中工单的 Mandate 与策略版本（docs/002-authorization.md）
+src/policy.ts @ReSerendipity
+src/admission.ts @ReSerendipity
+
+# 入库的构建产物：必须与新鲜构建一致，由 release:check 校验
+lib/** @ReSerendipity
+
+# 提示词资产：默认文本与风格预设直接决定两个角色的行为与纪律底线
+prompts/** @ReSerendipity
+
+# 许可与归属：MIT 义务要求上游署名不得消失（tests/release-invariants.spec.ts 锁住）
+NOTICE @ReSerendipity
+LICENSE @ReSerendipity
+
+# 发布与打包闸门：改这里等于改发布口径（§10）
+scripts/release-check.ps1 @ReSerendipity
+scripts/pack-plugin.mjs @ReSerendipity

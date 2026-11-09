@@ -6,6 +6,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from 'vitest'
 import type { UserMessage } from '@deepseek-ai/dsh-llm'
+import { inboxKind } from '../src/sources/inbox.ts'
 import { renderPrompt } from '@deepseek-ai/dsh-system-prompt'
 import { Runtime } from '../src/app/runtime.ts'
 import { jobRegistry } from './fixtures/host.ts'
@@ -35,6 +36,12 @@ import { preview, readable } from '../src/app/views/text.ts'
 import { decisionList, search, threadDetail, threadList } from '../src/app/views/threads.ts'
 import { executorLoad, ticketDetail, ticketList } from '../src/app/views/tickets.ts'
 
+// These assert the POSIX worker shims, the env wrapper and sh -c prepare argv; Windows uses batch shims, an explicit env layer and cmd.exe.
+const WINDOWS = process.platform === 'win32'
+
+// The prepare command runs through the platform's own shell: sh on POSIX, cmd.exe on Windows.
+const PREPARE_SHELL = process.platform === 'win32' ? 'cmd.exe' : 'sh'
+
 let runtime: Runtime
 const viewsOf = (value: Runtime) => ({ store: value.store, sources: value.sources, links: value.links() })
 const overviewOf = (value: Runtime) => overview(viewsOf(value), value.health, policyVersion(value.store.settings()), executorLoad(value.store, value.executor.activeCount()), value.setupProblem ?? value.feishuProblem)
@@ -49,9 +56,14 @@ let guards: Map<string, Guard>
 let restricts: Map<string, unknown[]>
 type HttpHandler = (req: unknown, res: unknown) => Promise<void>
 let http: HttpHandler
-async function api(method: string, path: string): Promise<{ status: number; body: unknown }> {
+async function api(method: string, path: string, body?: unknown): Promise<{ status: number; body: unknown }> {
   let status = 0, text = ''
-  const req = { method, url: `/orchestrator/api/${path}`, headers: { host: '127.0.0.1:3082', 'x-orchestrator-request': '1' } }
+  const payload = body === undefined ? '' : JSON.stringify(body)
+  const req = {
+    method, url: `/orchestrator/api/${path}`,
+    headers: { host: '127.0.0.1:3082', 'x-orchestrator-request': '1', 'content-length': String(Buffer.byteLength(payload)) },
+    async *[Symbol.asyncIterator]() { if (payload !== '') yield Buffer.from(payload) },
+  }
   await http(req, { writeHead: (code: number) => { status = code }, end: (data: string) => { text = data } })
   return { status, body: JSON.parse(text) }
 }
@@ -840,7 +852,7 @@ it('waits for setup without the agent\'s GitHub CLI: the panel works, and nothin
   await vi.waitFor(() => expect(restarts).toHaveBeenCalledTimes(2))
 })
 
-it('reports each setup problem where the operator fixes it, and checks the agent CLI the way worker shells run it', async () => {
+it.skipIf(WINDOWS)('reports each setup problem where the operator fixes it, and checks the agent CLI the way worker shells run it', async () => {
   const needs = async (place: string, code: string, values: Record<string, string>, accounts: Accounts = {}) => {
     const next = await restart({}, accounts)
     await next.ready
@@ -970,7 +982,7 @@ it('runs setup again while the Feishu bot check failed, and restores the process
   expect(process.env.PATH?.split(':')).not.toContain(join(directory, 'worker-bin'))
 })
 
-it('writes worker shims and the agent environment from the configuration only, and restores the environment on stop', async () => {
+it.skipIf(WINDOWS)('writes worker shims and the agent environment from the configuration only, and restores the environment on stop', async () => {
   const bin = join(directory, 'worker-bin')
   expect(readdirSync(bin).sort()).toEqual(['gh', 'lark-cli'])
   expect(readFileSync(join(bin, 'lark-cli'), 'utf8')).toContain(`exec '${BOT()}'`)
@@ -1000,7 +1012,7 @@ it('waits for setup when the shim directory holds a file dsh-superagent did not 
   await next.stop()
 })
 
-it('rewrites the blocked-command shims when the Executor settings change them, without a restart', async () => {
+it.skipIf(WINDOWS)('rewrites the blocked-command shims when the Executor settings change them, without a restart', async () => {
   const bin = join(directory, 'worker-bin')
   const save = (blockedCommands: string[]) => runtime.settings.save('executor', { ...runtime.store.settings().executor, blockedCommands }, runtime.store.blockRevision('executor'), 'panel')
   expect(await save(['personal-gh'])).toMatchObject({ saved: true, restarting: false })
@@ -1076,9 +1088,9 @@ it('leaves auto-merge to the delivery requirements, with the agent\'s own gh and
   expect(runtime.prompts.preview(runtime.prompts.current().config).worker).not.toContain('gh-merge')
 })
 
-it('runs the prepare command once for a new ticket, under the execution root with the ticket\'s environment, and fails the ticket with its output', async () => {
+it.skipIf(WINDOWS)('runs the prepare command once for a new ticket, under the execution root with the ticket\'s environment, and fails the ticket with its output', async () => {
   const prepare = (command: string) => runtime.store.saveSettings({ ...runtime.store.settings(), executor: { ...runtime.store.settings().executor, prepare: command } })
-  const runs = () => subprocess.spawn.mock.calls.map(([spec]) => spec as { argv: string[]; cwd: string; env?: Record<string, string> }).filter(spec => spec.argv[0] === 'sh')
+  const runs = () => subprocess.spawn.mock.calls.map(([spec]) => spec as { argv: string[]; cwd: string; env?: Record<string, string> }).filter(spec => spec.argv[0] === PREPARE_SHELL)
   prepare('git -C /srv/widgets worktree add "$DSH_SUPERAGENT_DIR" -b "agent/$DSH_SUPERAGENT_NAME"')
   const { ticket } = await acceptedTicket()
   expect(runs()).toEqual([expect.objectContaining({ argv: ['sh', '-c', 'git -C /srv/widgets worktree add "$DSH_SUPERAGENT_DIR" -b "agent/$DSH_SUPERAGENT_NAME"'], cwd: join(directory, 'work'),
@@ -1106,7 +1118,7 @@ it('counts a ticket whose directory the host prepared before prepare commands ex
   subprocess.spawn.mockClear()
   await runtime.engine.retryTicket(ticket.id)
   await runtime.idle()
-  expect(subprocess.spawn.mock.calls.some(([spec]) => spec.argv[0] === 'sh')).toBe(false)
+  expect(subprocess.spawn.mock.calls.some(([spec]) => spec.argv[0] === PREPARE_SHELL)).toBe(false)
   expect(runtime.store.tickets.get(ticket.id)!.assignments.at(-1)!.state).toBe('running')
 })
 
@@ -1572,7 +1584,7 @@ it('gives an explicit ticket\'s worker a prompt without the limits of an inferre
   expect(sections.get(sessionId)!.text({})).not.toContain(mandateInstructions({ strength: 'inferred' }))
 })
 
-it('runs a launch that fails for a passing reason again on the launch backoff three times, then fails its ticket; a failed prepare fails at once', async () => {
+it.skipIf(WINDOWS)('runs a launch that fails for a passing reason again on the launch backoff three times, then fails its ticket; a failed prepare fails at once', async () => {
   const original = controller.resolveAgent.getMockImplementation()! as (id: string) => Promise<unknown>
   const later = async (now: number) => {
     vi.useFakeTimers({ toFake: ['Date'], now })
@@ -1597,7 +1609,7 @@ it('runs a launch that fails for a passing reason again on the launch backoff th
     controller.resolveAgent.mockImplementation(original)
   }
   // A prepare command whose output names a passing failure is not run again on its own.
-  const runs = () => subprocess.spawn.mock.calls.filter(([spec]) => (spec as { argv: string[] }).argv[0] === 'sh').length
+  const runs = () => subprocess.spawn.mock.calls.filter(([spec]) => (spec as { argv: string[] }).argv[0] === PREPARE_SHELL).length
   runtime.store.saveSettings({ ...runtime.store.settings(), executor: { ...runtime.store.settings().executor, prepare: 'exit 3' } })
   answers['sh -c exit 3'] = new Error('fatal: unable to access: The requested URL returned error: 503')
   const before = runs()
@@ -1616,7 +1628,7 @@ it('runs a launch that fails for a passing reason again on the launch backoff th
   expect(runtime.store.tickets.get(prepared.ticket.id)!.assignments.at(-1)).toMatchObject({ state: 'running' })
 })
 
-it('launches a queued Assignment once when the host resumes, and gives a failed launch\'s slot back', async () => {
+it.skipIf(WINDOWS)('launches a queued Assignment once when the host resumes, and gives a failed launch\'s slot back', async () => {
   runtime.store.saveSettings({ ...runtime.store.settings(), executor: { ...runtime.store.settings().executor, maxWorkers: 1, prepare: 'exit 3' } })
   answers['sh -c exit 3'] = new Error('fatal: no such clone')
   const failed = await acceptedTicket(feishu('50', '@bot 修 一', { root_id: undefined }))
@@ -1793,4 +1805,19 @@ it('keeps the Policy the main Session judges by in its prompt, after admission a
   await runtime.settings.save('policy', { ...saved.policy, rules: rules.map(rule => ({ ...rule, enabled: false })) }, runtime.store.blockRevision('policy'), 'panel')
   expect(policy()).toContain('No rule is enabled: a proactive candidate can only be ignored.')
   expect(policy()).toContain('The accept mode and the rules decide proactive candidates only')
+})
+
+// The in-app way to ask for work: the panel writes an ordinary inbox file, and refuses when no inbox Source is enabled.
+it('writes a panel-dispatched ticket into the inbox Source, and refuses while none is enabled', async () => {
+  const refused = await api('POST', 'tickets', { title: '没有收件目录' })
+  expect(refused.status).toBe(400)
+  const inbox = mkdtempSync(join(tmpdir(), 'panel-dispatch-'))
+  runtime.sources.register(inboxKind)
+  await runtime.settings.save('source:inbox', { kind: 'inbox', enabled: true,
+    config: { inboxDir: inbox, actor: 'local', pollSeconds: 10 } }, runtime.store.blockRevision('source:inbox'), 'panel')
+  const created = await api('POST', 'tickets', { title: '把主按钮改成蓝色', body: '只改颜色，不动布局' })
+  expect(created.status).toBe(200)
+  const file = (created.body as { file: string }).file
+  expect(readdirSync(inbox)).toContain(file)
+  expect(readFileSync(join(inbox, file), 'utf8')).toContain('只改颜色，不动布局')
 })

@@ -1,0 +1,51 @@
+# 远端载体（治理标准 §20.1）：typecheck、构建一致性检查与全量测试必须在推送 / PR 上跑，
+# 不依赖维护者本机；公开仓的分钟数走免费额度，故周检在转公开后再加 schedule。
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Typecheck, build, tests
+    # The product targets Windows: `tests/windows-port.spec.ts` asserts `.cmd` wrappers and the
+    # named-pipe probes, so a Linux runner would fail on tests that are correct for the shipped
+    # platform. Run the suite where the plugin actually runs.
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v5
+        with:
+          version: 11.7.0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm build
+      # A git install serves `lib/` as committed, so a green test run alone does not prove that
+      # lib matches src. Fail when the fresh build changed the tracked build output.
+      - name: Committed lib matches a fresh build
+        shell: pwsh
+        run: |
+          $dirty = git status --porcelain -- lib
+          if ($dirty) {
+            Write-Host 'lib/ is stale - rebuild and commit it.'
+            git diff --stat -- lib
+            Write-Host $dirty
+            exit 1
+          }
+          Write-Host 'lib/ is what a git install serves'
+      - run: pnpm vitest run

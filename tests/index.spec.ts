@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest'
-import { Config, type Machine } from '../src/deployment.ts'
+import { Config, defaultStateDir, type Machine } from '../src/deployment.ts'
 import { apply } from '../src/index.ts'
 
 // Stub Runtime to capture the resolved Machine settings and restart callback.
@@ -39,6 +39,17 @@ it('reads a limit DSH commits a new value of without a restart, and asks DSH to 
   expect(machine.promptMaxChars.get()).toBe(8000)
   expect(handlers.has('loader/volatile-update')).toBe(false)
   expect(ctx.fiber.restart).not.toHaveBeenCalled()
+})
+
+it('derives the state directory from the running profile when the configuration names none, and says so', async () => {
+  const { ctx, describe } = context()
+  ctx.get.mockImplementation((name: string) => (name === 'settings' ? { describe } : name === 'profileContext' ? { name: 'desktop' } : undefined) as never)
+  vi.stubEnv('DSH_HOME', '/derived-home')
+  try {
+    await apply(ctx as never, Config({}))
+    expect(runtimes.at(-1)!.machine.stateDir).toBe(defaultStateDir('desktop'))
+    expect(ctx.logger.info).toHaveBeenCalledWith(expect.stringContaining('per-profile default'), expect.stringContaining('desktop-superagent'))
+  } finally { vi.unstubAllEnvs() }
 })
 
 it('asks DSH to read its settings entry again once a restart it started finished', async () => {

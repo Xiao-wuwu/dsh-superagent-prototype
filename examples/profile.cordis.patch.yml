@@ -1,12 +1,31 @@
-# Example profile configuration ($DSH_HOME/profiles/<profile>/cordis.patch.yml).
+# Example profile configuration: %USERPROFILE%\.dsh\profiles\<profile>\cordis.patch.yml
 # Replace <placeholders> before first start; see docs/006-deployment.md.
+#
+# `stateDir` is optional since 0.1.5: unconfigured, the plugin derives `<DSH home>/state/<profile>-superagent`
+# (a profile named `superagent` keeps `state/superagent`), so one backend per state directory
+# (`<stateDir>.lock`) still holds. Set it explicitly to choose a different directory instead.
 - id: webserver
   config:
     host: 127.0.0.1
     port: 3082
 - id: dsh-superagent
   config:
-    stateDir: <absolute path, for example /home/me/.dsh/state/superagent>
+    stateDir: C:/Users/<you>/.dsh/state/superagent
+    # POSIX form, kept for reference only (the product targets Windows):
+    # stateDir: /home/<you>/.dsh/state/superagent
+    # mode: local
 # Feishu is optional: uncomment to enable its Source, then set the bot's lark-cli on the Feishu Source.
 # - id: dsh-superagent-feishu
+#   disabled: false
+
+# Local mode (no GitHub) needs all three pieces below. The inbox admission list must be
+# non-empty as well (Settings -> Eval -> who can dispatch, add `local`); otherwise a dropped
+# ticket is judged `not_a_member` and archived silently, with no reply written.
+# - id: dsh-superagent
+#   config:
+#     stateDir: C:/Users/<you>/.dsh/state/superagent
+#     mode: local
+# - id: dsh-superagent-github
+#   disabled: true
+# - id: dsh-superagent-inbox
 #   disabled: false
