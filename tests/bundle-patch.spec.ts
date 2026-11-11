@@ -43,7 +43,15 @@ it('replaces the base root of the workspace and session stores with the per-inst
 it('defines the worker preset Executor Sessions run under, with a shell that moves long commands to the background', async () => {
   const rows = await patched()
   expect(rows.map(row => row.id)).toEqual(['storage-json', 'session-persistence-jsonl', 'dsh-superagent', 'dsh-superagent-github', 'dsh-superagent-feishu', 'dsh-superagent-inbox',
-    'dsh-superagent-worker-preset', 'dsh-superagent-router-preset'])
+    'dsh-superagent-filewatch', 'dsh-superagent-worker-preset', 'dsh-superagent-router-preset'])
+  // This branch is the local signal loop: the account-backed Sources stay disabled and the file watch stays enabled.
+  // The entries are kept rather than deleted, so one profile line re-enables any of them and an upgrade still lands
+  // on upstream's file set. Without this assertion a merge could silently turn GitHub back on.
+  const source = (id: string) => rows.find(row => row.id === id)!
+  expect(source('dsh-superagent-github').disabled, 'GitHub must stay off in a local-only branch').toBe(true)
+  expect(source('dsh-superagent-feishu').disabled, 'Feishu must stay off').toBe(true)
+  expect(source('dsh-superagent-inbox').disabled, 'the inbox stays off until an operator enables it').toBe(true)
+  expect(source('dsh-superagent-filewatch').disabled, 'the file watch is the reason this branch exists').toBeUndefined()
   const preset = presetOf(rows, WORKER_PRESET)
   expect(preset.id).toBe(WORKER_PRESET)
   const plugins = flat(preset.plugins)

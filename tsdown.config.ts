@@ -15,7 +15,7 @@ export default defineConfig([
   // builtins: a plugin installed as a linked local directory gets no dependencies installed for it, and
   // `tests/release-invariants.spec.ts` fails if a built file ever imports anything outside that set.
   { entry: { index: 'src/index.ts', 'github-watch': 'src/sources/github.ts', 'feishu-watch': 'src/sources/feishu.ts', 'inbox-watch': 'src/sources/inbox.ts',
-    'instances-view': 'src/app/instances-view.ts' }, outDir: 'lib', format: 'esm', fixedExtension: false, platform: 'node', target: 'es2024', dts: true, clean: true,
+    'filewatch-watch': 'src/sources/filewatch.ts', 'instances-view': 'src/app/instances-view.ts' }, outDir: 'lib', format: 'esm', fixedExtension: false, platform: 'node', target: 'es2024', dts: true, clean: true,
     deps: { neverBundle: [/^@deepseek-ai\//], alwaysBundle: ['zod', 'proper-lockfile', 'graceful-fs', 'retry', 'signal-exit'] } },
   { entry: { client: 'src/client/index.tsx' }, outDir: 'lib', format: 'cjs', platform: 'browser', dts: false, clean: false, plugins: [raw],
     deps: { neverBundle: ['react', 'react/jsx-runtime', 'react-dom'] },

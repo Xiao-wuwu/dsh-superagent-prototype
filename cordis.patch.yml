@@ -6,6 +6,7 @@
       name: '@reserendipity/dsh-superagent'
     - id: dsh-superagent-github
       name: '@reserendipity/dsh-superagent/github-watch'
+      disabled: true
     # Optional Feishu Source; requires configuring a bot CLI after enabling.
     - id: dsh-superagent-feishu
       name: '@reserendipity/dsh-superagent/feishu-watch'
@@ -14,6 +15,10 @@
     - id: dsh-superagent-inbox
       name: '@reserendipity/dsh-superagent/inbox-watch'
       disabled: true
+    # Local-first signal source: real fs.watch events, one shape for created/changed/renamed/deleted. On by default,
+    # because this branch exists for the file-watch loop; it needs no account and no network.
+    - id: dsh-superagent-filewatch
+      name: '@reserendipity/dsh-superagent/filewatch-watch'
     # The agent preset of every Executor Session (WORKER_PRESET in src/app/sessions.ts); the main Session has its own, below.
     # It is DSH's `standard` preset with only what a worker needs, and a shell whose foreground command moves to a background job
     # after 5 seconds, so a long command does not hold back a person's message, which the Session takes at its next step. Left

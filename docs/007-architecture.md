@@ -391,6 +391,8 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `src/sources/admission-context.ts` | The bounded window an assessment starts from: the first pages of a Trigger's Thread, read through its kind, and the messages around the Trigger |
 | `src/sources/feishu-image.ts` | Reads a Feishu message's image as an attachment for the assessing Session |
 | `src/sources/inbox.ts` | The Mode A inbox kind and plugin entry, exported as `./inbox-watch`: task files in a local directory become Triggers, the archive move is the cursor, and replies append to a file under `done/` |
+| `src/sources/filewatch.ts` | The file-watch kind and plugin entry, exported as `./filewatch-watch`: one `fs.watch` handle per configured directory, the four event names reported as one signal shape, the settled state re-checked after the debounce window, and the matching experiences attached before thinking |
+| `src/experience/store.ts` | The experience layer: one JSON file under the state directory, the record shape shared with `scripts/experience.mjs`, matcher semantics (an empty list means any), and the use counter that orders several habits |
 | `src/client/index.tsx` | The client plugin entry: the sidebar entry, the main panel and the page in DeepSeek Harness's Plugin Manager |
 | `src/client/app.tsx` | The panel: header, search, glossary, tabs and the page of the current route |
 | `src/client/provider.tsx` | What every page reads from its host: copy, calls, navigation, notices, the state poll, and `restart`, which reads the state quickly while dsh-superagent restarts |
@@ -417,7 +419,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `src/client/locales.ts` | All copy in both languages, and the glossary of [001 Domain model](001-domain.md) |
 | `src/client/client.css`, `css.d.ts` | The panel's stylesheet, loaded as text |
 
-`src/sources/github.ts`, `src/sources/feishu.ts` and `src/sources/inbox.ts` are also the entries of the three Source plugins, built by `tsdown.config.ts` and exported in `package.json` as `./github-watch`, `./feishu-watch` and `./inbox-watch`. The bundle's `cordis.patch.yml` inserts the four plugins, with Feishu and the inbox disabled.
+`src/sources/github.ts`, `src/sources/feishu.ts`, `src/sources/inbox.ts` and `src/sources/filewatch.ts` are also the entries of the four Source plugins, built by `tsdown.config.ts` and exported in `package.json` as `./github-watch`, `./feishu-watch`, `./inbox-watch` and `./filewatch-watch`. The bundle's `cordis.patch.yml` inserts all five plugins: **GitHub, Feishu and the inbox are disabled, the file watch is enabled**, because this branch exists for the local signal loop and needs no account and no network. A disabled entry stays in the patch rather than being deleted, so an operator re-enables it with one line in the profile patch (`- id: dsh-superagent-github` / `disabled: false`) and an upgrade still lands on the same file set as upstream.
 
 | `src/chat-router/config.ts` | `chatRouter` settings schema, the three tool presets, `allowedChatTools()` and `briefOf()` |
 | `src/chat-router/tool-groups.ts` | The tool groups the panel offers for the custom preset, with no runtime dependency |
@@ -439,6 +441,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `tests/registry.spec.ts` | `SourceRegistry`: instances, validation, Policy parts, Channels and Thread context |
 | `tests/sources.spec.ts` | The Feishu and GitHub Sources on a `SourceContext`: translation, polls and read positions, the pull request rules, health |
 | `tests/inbox.spec.ts` | The inbox Source on a `SourceContext`: file translation and stable ids, poll rounds with archiving, name collisions and retry, idempotent replies, scope, Policy defaults and the health entry |
+| `tests/filewatch.spec.ts` | The file-watch Source: the state machine of `classify`, the name and event filters, schema defaults and the refusal of an unknown key, the signal id and the experience line, Thread identity across later events, and a real `fs.watch` round that reports one dropped file and stays silent when nothing is switched on |
 | `tests/commands.spec.ts` | CLI calls as the deployment's accounts, the Channels' answers, and repository-scoped GitHub calls |
 | `tests/feishu-read.spec.ts`, `tests/github-read.spec.ts` | Feishu and GitHub reads |
 | `tests/admission-context.spec.ts`, `tests/feishu-image.spec.ts` | The Thread window of assessments, and Feishu image reads |

@@ -1,0 +1,29 @@
+# Local-first defaults for this branch: no GitHub Source, tickets come from file events and the inbox.
+# Copy to <stateDir>/config.json (or point configPath at it) and edit the watched directories.
+{
+  "$comment": "Sources, Policy and Execution blocks follow src/policy.ts SettingsSchema.",
+  "sources": {
+    "filewatch": {
+      "enabled": true,
+      "config": {
+        "dirs": [{ "path": "CHANGE ME: an absolute directory to watch" }],
+        "recursive": true,
+        "events": ["file.created", "file.renamed"],
+        "patterns": [],
+        "previewText": true,
+        "scanOnStart": false
+      }
+    },
+    "inbox": { "enabled": true, "config": { "inboxDir": "", "actor": "local", "pollSeconds": 10 } }
+  },
+  "policy": {
+    "sources": {
+      "filewatch": { "allowed": [{ "id": "filewatch", "name": "文件监听" }] },
+      "inbox": { "allowed": [{ "id": "local", "name": "本机" }] }
+    }
+  },
+  "executor": {
+    "root": "",
+    "prepareCommand": ""
+  }
+}

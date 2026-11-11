@@ -14,6 +14,8 @@ const ROOT = join(import.meta.dirname, '..')
 const read = (relative: string): string => readFileSync(join(ROOT, relative), 'utf8')
 const UPSTREAM = 'deepseek-ai/dsh-superagent-prototype'
 const BUILD = 'ReSerendipity/dsh-superagent'
+// This branch is published as a branch of the upstream repository under the operator's account.
+const BRANCH = 'Xiao-wuwu/dsh-superagent-prototype'
 const BINARY = /\.(png|ico|jpg|jpeg|webp|gif|zip|gz|zst|zstd|exe|dll|pak|dat|bin|pdf)$/i
 
 /** Credential shapes that must never appear in a tracked file. */
@@ -71,14 +73,18 @@ it('keeps the upstream attribution visible in every place a reader looks', () =>
 it('points the package metadata at this repository while crediting upstream', () => {
   const pkg = JSON.parse(read('package.json')) as Record<string, unknown>
   expect(pkg.license).toBe('MIT')
-  // The repository field is what a package page and a clone-from-metadata use, so it names this build;
-  // upstream stays credited through the description and the contributors list instead.
-  expect(JSON.stringify(pkg.repository)).toContain(BUILD)
+  // This branch is published as a branch of the upstream repository under the operator's account, so the field a
+  // clone-from-metadata uses names that branch; upstream and the Windows adaptation stay credited through the
+  // description and the contributors list instead.
+  expect(JSON.stringify(pkg.repository)).toContain(BRANCH)
   expect(JSON.stringify(pkg.contributors)).toContain('DeepSeek Harness Team')
+  expect(JSON.stringify(pkg.contributors)).toContain('ReSerendipity')
   expect(String(pkg.description)).toContain(UPSTREAM)
-  expect(String(pkg.homepage)).toContain(BUILD)
+  // The homepage is where a reader lands from the package page, so it names this branch too.
+  expect(String(pkg.homepage)).toContain(BRANCH)
   expect(String(pkg.description)).toMatch(/适配版|adaptation/i)
-  // The install contract is the package id, scope included: a profile resolves the plugin by this name.
+  // The install contract is the package id, scope included: a profile resolves the plugin by this name, and the patch
+  // inserts entries with it. It stays the adaptation's id because that is what an existing install already uses.
   expect(pkg.name).toBe('@reserendipity/dsh-superagent')
 })
 
